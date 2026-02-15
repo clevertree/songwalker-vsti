@@ -83,17 +83,21 @@ jobs:
         run: |
           mkdir -p target/bundled-universal
 
-          # CLAP — single binary
+          AARCH_DIR=target/aarch64-apple-darwin/bundled
+          X86_DIR=target/x86_64-apple-darwin/bundled
+
+          # CLAP — single binary, lipo both arch builds
           lipo -create \
-            target/bundled/songwalker_vsti.clap \
+            "$AARCH_DIR/songwalker_vsti.clap" \
+            "$X86_DIR/songwalker_vsti.clap" \
             -output target/bundled-universal/songwalker_vsti.clap
 
-          # VST3 — binary is inside the bundle
-          cp -r target/bundled/songwalker_vsti.vst3 target/bundled-universal/songwalker_vsti.vst3
-          VST3_BIN=$(find target/bundled-universal/songwalker_vsti.vst3 -name songwalker_vsti -type f)
-          AARCH_BIN=$(find target/aarch64-apple-darwin/bundled/songwalker_vsti.vst3 -name songwalker_vsti -type f || true)
-          X86_BIN=$(find target/x86_64-apple-darwin/bundled/songwalker_vsti.vst3 -name songwalker_vsti -type f || true)
-          if [ -n "$AARCH_BIN" ] && [ -n "$X86_BIN" ]; then
+          # VST3 — copy the bundle structure from one arch, then lipo the binary
+          cp -r "$AARCH_DIR/songwalker_vsti.vst3" target/bundled-universal/songwalker_vsti.vst3
+          VST3_BIN=$(find target/bundled-universal/songwalker_vsti.vst3 -type f -name "songwalker_vsti" | head -1)
+          AARCH_BIN=$(find "$AARCH_DIR/songwalker_vsti.vst3" -type f -name "songwalker_vsti" | head -1)
+          X86_BIN=$(find "$X86_DIR/songwalker_vsti.vst3" -type f -name "songwalker_vsti" | head -1)
+          if [ -n "$AARCH_BIN" ] && [ -n "$X86_BIN" ] && [ -n "$VST3_BIN" ]; then
             lipo -create "$AARCH_BIN" "$X86_BIN" -output "$VST3_BIN"
           fi
 
