@@ -72,25 +72,23 @@ jobs:
       # ── macOS universal ──
       - name: Bundle (macOS arm64)
         if: runner.os == 'macOS'
-        run: cargo xtask bundle songwalker_vsti --release --target aarch64-apple-darwin
+        run: |
+          cargo xtask bundle songwalker_vsti --release --target aarch64-apple-darwin
+          mv target/bundled target/bundled-aarch64
 
       - name: Bundle (macOS x86_64)
         if: runner.os == 'macOS'
-        run: cargo xtask bundle songwalker_vsti --release --target x86_64-apple-darwin
+        run: |
+          cargo xtask bundle songwalker_vsti --release --target x86_64-apple-darwin
+          mv target/bundled target/bundled-x86_64
 
       - name: Create universal binary (macOS)
         if: runner.os == 'macOS'
         run: |
           mkdir -p target/bundled-universal
 
-          AARCH_DIR=target/aarch64-apple-darwin/bundled
-          X86_DIR=target/x86_64-apple-darwin/bundled
-
-          # Debug: list what nih-plug actually produced
-          echo "=== aarch64 bundled ==="
-          find "$AARCH_DIR" -maxdepth 3 -ls 2>/dev/null || echo "(empty)"
-          echo "=== x86_64 bundled ==="
-          find "$X86_DIR" -maxdepth 3 -ls 2>/dev/null || echo "(empty)"
+          AARCH_DIR=target/bundled-aarch64
+          X86_DIR=target/bundled-x86_64
 
           # CLAP — on macOS this is a bundle directory
           cp -r "$AARCH_DIR/songwalker_vsti.clap" target/bundled-universal/songwalker_vsti.clap
