@@ -1,5 +1,4 @@
 use nih_plug::prelude::*;
-use nih_plug_egui::EguiState;
 use std::sync::{Arc, Mutex};
 
 use crate::audio::AudioEngine;

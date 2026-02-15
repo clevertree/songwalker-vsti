@@ -1,11 +1,8 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use songwalker_core::preset::{CatalogEntry, LibraryIndex};
 
 use super::cache::DiskCache;
-use super::loader::PresetLoader;
-use crate::slots::preset_slot::PresetInstance;
 
 /// Status of a library in the manager.
 #[derive(Debug, Clone, PartialEq, Eq)]

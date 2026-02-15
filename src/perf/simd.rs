@@ -60,46 +60,50 @@ fn apply_gain_scalar(buf: &mut [f32], gain: f32, n: usize) {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx")]
 unsafe fn mix_add_avx(dst: &mut [f32], src: &[f32], gain: f32, n: usize) {
-    use std::arch::x86_64::*;
+    unsafe {
+        use std::arch::x86_64::*;
 
-    let gain_vec = _mm256_set1_ps(gain);
-    let chunks = n / 8;
-    let remainder = n % 8;
+        let gain_vec = _mm256_set1_ps(gain);
+        let chunks = n / 8;
+        let remainder = n % 8;
 
-    for i in 0..chunks {
-        let offset = i * 8;
-        let s = _mm256_loadu_ps(src.as_ptr().add(offset));
-        let d = _mm256_loadu_ps(dst.as_ptr().add(offset));
-        let result = _mm256_add_ps(d, _mm256_mul_ps(s, gain_vec));
-        _mm256_storeu_ps(dst.as_mut_ptr().add(offset), result);
-    }
+        for i in 0..chunks {
+            let offset = i * 8;
+            let s = _mm256_loadu_ps(src.as_ptr().add(offset));
+            let d = _mm256_loadu_ps(dst.as_ptr().add(offset));
+            let result = _mm256_add_ps(d, _mm256_mul_ps(s, gain_vec));
+            _mm256_storeu_ps(dst.as_mut_ptr().add(offset), result);
+        }
 
-    // Handle remaining samples
-    let start = chunks * 8;
-    for i in start..(start + remainder) {
-        dst[i] += src[i] * gain;
+        // Handle remaining samples
+        let start = chunks * 8;
+        for i in start..(start + remainder) {
+            dst[i] += src[i] * gain;
+        }
     }
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx")]
 unsafe fn apply_gain_avx(buf: &mut [f32], gain: f32, n: usize) {
-    use std::arch::x86_64::*;
+    unsafe {
+        use std::arch::x86_64::*;
 
-    let gain_vec = _mm256_set1_ps(gain);
-    let chunks = n / 8;
-    let remainder = n % 8;
+        let gain_vec = _mm256_set1_ps(gain);
+        let chunks = n / 8;
+        let remainder = n % 8;
 
-    for i in 0..chunks {
-        let offset = i * 8;
-        let s = _mm256_loadu_ps(buf.as_ptr().add(offset));
-        let result = _mm256_mul_ps(s, gain_vec);
-        _mm256_storeu_ps(buf.as_mut_ptr().add(offset), result);
-    }
+        for i in 0..chunks {
+            let offset = i * 8;
+            let s = _mm256_loadu_ps(buf.as_ptr().add(offset));
+            let result = _mm256_mul_ps(s, gain_vec);
+            _mm256_storeu_ps(buf.as_mut_ptr().add(offset), result);
+        }
 
-    let start = chunks * 8;
-    for sample in buf[start..(start + remainder)].iter_mut() {
-        *sample *= gain;
+        let start = chunks * 8;
+        for sample in buf[start..(start + remainder)].iter_mut() {
+            *sample *= gain;
+        }
     }
 }
 

@@ -1,5 +1,4 @@
 use std::fs;
-use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use sha2::{Digest, Sha256};

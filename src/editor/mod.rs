@@ -218,8 +218,8 @@ fn draw_editor(
 fn draw_settings(
     ui: &mut egui::Ui,
     state: &mut EditorState,
-    setter: &ParamSetter,
-    params: &SongWalkerParams,
+    _setter: &ParamSetter,
+    _params: &SongWalkerParams,
 ) {
     ui.heading(egui::RichText::new("Settings").color(colors::TEXT));
     ui.separator();

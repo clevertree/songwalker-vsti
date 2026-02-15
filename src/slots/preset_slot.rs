@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use songwalker_core::preset::{PresetDescriptor, PresetNode, SampleZone};
+use songwalker_core::preset::{PresetDescriptor, SampleZone};
 
 use super::slot::EnvelopeParams;
 

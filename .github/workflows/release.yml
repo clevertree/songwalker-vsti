@@ -1,0 +1,158 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux-x86_64
+            archive: tar.gz
+          - os: macos-latest
+            name: macos-universal
+            archive: tar.gz
+          - os: windows-latest
+            name: windows-x86_64
+            archive: zip
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout songwalker-core
+        uses: actions/checkout@v4
+        with:
+          repository: clevertree/songwalker-core
+          path: ../songwalker-core
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libx11-dev \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            pkg-config
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ matrix.name }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ matrix.name }}-cargo-
+
+      # ── Linux ──
+      - name: Bundle (Linux)
+        if: runner.os == 'Linux'
+        run: cargo xtask bundle songwalker_vsti --release
+
+      # ── macOS universal ──
+      - name: Bundle (macOS arm64)
+        if: runner.os == 'macOS'
+        run: cargo xtask bundle songwalker_vsti --release --target aarch64-apple-darwin
+
+      - name: Bundle (macOS x86_64)
+        if: runner.os == 'macOS'
+        run: cargo xtask bundle songwalker_vsti --release --target x86_64-apple-darwin
+
+      - name: Create universal binary (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p target/bundled-universal
+
+          # CLAP — single binary
+          lipo -create \
+            target/bundled/songwalker_vsti.clap \
+            -output target/bundled-universal/songwalker_vsti.clap
+
+          # VST3 — binary is inside the bundle
+          cp -r target/bundled/songwalker_vsti.vst3 target/bundled-universal/songwalker_vsti.vst3
+          VST3_BIN=$(find target/bundled-universal/songwalker_vsti.vst3 -name songwalker_vsti -type f)
+          AARCH_BIN=$(find target/aarch64-apple-darwin/bundled/songwalker_vsti.vst3 -name songwalker_vsti -type f || true)
+          X86_BIN=$(find target/x86_64-apple-darwin/bundled/songwalker_vsti.vst3 -name songwalker_vsti -type f || true)
+          if [ -n "$AARCH_BIN" ] && [ -n "$X86_BIN" ]; then
+            lipo -create "$AARCH_BIN" "$X86_BIN" -output "$VST3_BIN"
+          fi
+
+      # ── Windows ──
+      - name: Bundle (Windows)
+        if: runner.os == 'Windows'
+        run: cargo xtask bundle songwalker_vsti --release
+
+      # ── Package ──
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cd target/bundled
+          tar czf ../../songwalker-${{ matrix.name }}.tar.gz \
+            songwalker_vsti.clap songwalker_vsti.vst3
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd target/bundled-universal
+          tar czf ../../songwalker-${{ matrix.name }}.tar.gz \
+            songwalker_vsti.clap songwalker_vsti.vst3
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd target/bundled
+          Compress-Archive -Path songwalker_vsti.clap, songwalker_vsti.vst3 `
+            -DestinationPath ../../songwalker-${{ matrix.name }}.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: songwalker-${{ matrix.name }}
+          path: songwalker-${{ matrix.name }}.${{ matrix.archive }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          generate_release_notes: true
+          files: |
+            artifacts/songwalker-linux-x86_64/songwalker-linux-x86_64.tar.gz
+            artifacts/songwalker-macos-universal/songwalker-macos-universal.tar.gz
+            artifacts/songwalker-windows-x86_64/songwalker-windows-x86_64.zip

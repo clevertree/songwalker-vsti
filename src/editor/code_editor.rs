@@ -11,7 +11,7 @@ pub fn draw(ui: &mut egui::Ui, source: &mut String) {
         ui.separator();
 
         // Full-size code editor
-        let response = ui.add(
+        let _response = ui.add(
             egui::TextEdit::multiline(source)
                 .font(egui::TextStyle::Monospace)
                 .desired_rows(20)

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use nih_plug::prelude::*;
 
 /// Top-level plugin parameters exposed to the DAW for automation.

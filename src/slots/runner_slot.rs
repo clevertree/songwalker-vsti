@@ -1,6 +1,6 @@
 use songwalker_core::compiler::{EventKind, EventList};
 
-use super::slot::{EnvelopeParams, Voice, VoicePool};
+use super::slot::{EnvelopeParams, VoicePool};
 use crate::transport::TransportState;
 
 /// Default root note for runner instances (C4 = MIDI 60).
@@ -96,7 +96,7 @@ impl RunnerSlotState {
             velocity,
             cursor: 0,
             position_beats: 0.0,
-            bpm: transport.bpm,
+            _bpm: transport.bpm,
             active: true,
             releasing: false,
         };
@@ -165,7 +165,7 @@ impl RunnerSlotState {
                         EventKind::Note {
                             pitch,
                             velocity: note_vel,
-                            gate,
+                            gate: _,
                             ..
                         } => {
                             // Parse pitch string to MIDI note, apply transpose
@@ -218,7 +218,7 @@ struct RunnerInstance {
     /// Current position in beats.
     position_beats: f64,
     /// BPM at the time of instance creation.
-    bpm: f64,
+    _bpm: f64,
     /// Whether this instance is still active.
     active: bool,
     /// Whether this instance is releasing (Note Off received).

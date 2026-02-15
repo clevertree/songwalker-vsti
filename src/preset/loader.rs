@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use base64::Engine as _;
 use songwalker_core::preset::{
-    AudioCodec, AudioReference, CatalogEntry, LibraryIndex, PresetDescriptor, SampleZone,
+    AudioCodec, AudioReference, LibraryIndex, PresetDescriptor, SampleZone,
 };
 
 use super::cache::DiskCache;
@@ -192,8 +192,8 @@ impl PresetLoader {
         library: &str,
         preset_path: &str,
         audio_ref: &AudioReference,
-        source_sample_rate: u32,
-        host_sample_rate: f32,
+        _source_sample_rate: u32,
+        _host_sample_rate: f32,
     ) -> Result<Vec<f32>, String> {
         let cache_key = audio_ref_cache_key(audio_ref);
 

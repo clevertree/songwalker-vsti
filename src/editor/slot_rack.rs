@@ -60,15 +60,15 @@ pub fn draw(ui: &mut egui::Ui, state: &mut EditorState) {
                 for idx in 0..slot_count {
                     let is_selected = state.slot_rack_state.selected_slot == idx;
 
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(if is_selected {
                             colors::SURFACE0
                         } else {
                             colors::MANTLE
                         })
                         .inner_margin(8.0)
-                        .outer_margin(egui::Margin::symmetric(0.0, 2.0))
-                        .rounding(4.0)
+                        .outer_margin(egui::Margin::symmetric(0, 2))
+                        .corner_radius(4.0)
                         .stroke(egui::Stroke::new(
                             1.0,
                             if is_selected {

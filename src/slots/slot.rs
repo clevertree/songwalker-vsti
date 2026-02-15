@@ -64,44 +64,34 @@ impl Default for Voice {
 /// Pre-allocated voice pool for a single slot.
 pub struct VoicePool {
     voices: Vec<Voice>,
-    max_polyphony: usize,
+    _max_polyphony: usize,
 }
 
 impl VoicePool {
     pub fn new(max_polyphony: usize) -> Self {
         Self {
             voices: vec![Voice::default(); max_polyphony],
-            max_polyphony,
+            _max_polyphony: max_polyphony,
         }
     }
 
     /// Allocate a voice for a new note. Uses round-robin stealing if full.
     pub fn allocate(&mut self, note: u8, velocity: f32) -> Option<&mut Voice> {
-        // First, try to find an inactive voice
-        if let Some(voice) = self.voices.iter_mut().find(|v| !v.active) {
-            voice.active = true;
-            voice.note = note;
-            voice.velocity = velocity;
-            voice.env_stage = 0;
-            voice.env_samples = 0;
-            voice.env_gain = 0.0;
-            voice.releasing = false;
-            voice.phase = 0.0;
-            voice.sample_pos = 0.0;
-            return Some(voice);
-        }
+        // Find an inactive voice, or steal the oldest releasing/oldest voice
+        let idx = if let Some(idx) = self.voices.iter().position(|v| !v.active) {
+            idx
+        } else {
+            // Steal: prefer releasing voices, fall back to index 0
+            self.voices
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| v.releasing)
+                .map(|(i, _)| i)
+                .next()
+                .unwrap_or(0)
+        };
 
-        // Steal the oldest releasing voice, or the oldest voice
-        let steal_idx = self
-            .voices
-            .iter()
-            .enumerate()
-            .filter(|(_, v)| v.releasing)
-            .map(|(i, _)| i)
-            .next()
-            .unwrap_or(0);
-
-        let voice = &mut self.voices[steal_idx];
+        let voice = &mut self.voices[idx];
         voice.active = true;
         voice.note = note;
         voice.velocity = velocity;
@@ -306,13 +296,14 @@ impl Slot {
                     // If a sampler preset is loaded, configure sample playback
                     if let Some(ref preset_instance) = self.preset_state.active_preset {
                         if let Some(zone) = preset_instance.find_zone(*note, *velocity) {
+                            let pitch = zone.pitch();
                             let rate = songwalker_core::preset::sample_playback_rate(
                                 *note,
-                                zone.pitch.root_note,
-                                zone.pitch.fine_tune_cents,
+                                pitch.root_note,
+                                pitch.fine_tune_cents,
                                 440.0,
                             );
-                            voice.sample_rate_ratio = rate * (zone.sample_rate as f64 / self.sample_rate as f64);
+                            voice.sample_rate_ratio = rate * (zone.sample_rate() as f64 / self.sample_rate as f64);
                             voice.sample_pos = 0.0;
                         }
                     }
