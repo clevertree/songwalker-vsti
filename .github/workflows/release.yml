@@ -30,10 +30,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Checkout songwalker-core
-        uses: actions/checkout@v4
-        with:
-          repository: clevertree/songwalker-core
-          path: ../songwalker-core
+        run: git clone --depth 1 https://github.com/clevertree/songwalker-core.git ../songwalker-core
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
