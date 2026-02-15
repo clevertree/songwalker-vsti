@@ -86,11 +86,20 @@ jobs:
           AARCH_DIR=target/aarch64-apple-darwin/bundled
           X86_DIR=target/x86_64-apple-darwin/bundled
 
-          # CLAP — single binary, lipo both arch builds
-          lipo -create \
-            "$AARCH_DIR/songwalker_vsti.clap" \
-            "$X86_DIR/songwalker_vsti.clap" \
-            -output target/bundled-universal/songwalker_vsti.clap
+          # Debug: list what nih-plug actually produced
+          echo "=== aarch64 bundled ==="
+          find "$AARCH_DIR" -maxdepth 3 -ls 2>/dev/null || echo "(empty)"
+          echo "=== x86_64 bundled ==="
+          find "$X86_DIR" -maxdepth 3 -ls 2>/dev/null || echo "(empty)"
+
+          # CLAP — on macOS this is a bundle directory
+          cp -r "$AARCH_DIR/songwalker_vsti.clap" target/bundled-universal/songwalker_vsti.clap
+          CLAP_BIN=$(find target/bundled-universal/songwalker_vsti.clap -type f -name "songwalker_vsti" | head -1)
+          AARCH_CLAP=$(find "$AARCH_DIR/songwalker_vsti.clap" -type f -name "songwalker_vsti" | head -1)
+          X86_CLAP=$(find "$X86_DIR/songwalker_vsti.clap" -type f -name "songwalker_vsti" | head -1)
+          if [ -n "$CLAP_BIN" ] && [ -n "$AARCH_CLAP" ] && [ -n "$X86_CLAP" ]; then
+            lipo -create "$AARCH_CLAP" "$X86_CLAP" -output "$CLAP_BIN"
+          fi
 
           # VST3 — copy the bundle structure from one arch, then lipo the binary
           cp -r "$AARCH_DIR/songwalker_vsti.vst3" target/bundled-universal/songwalker_vsti.vst3
