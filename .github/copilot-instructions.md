@@ -59,11 +59,26 @@ The `Build & Release` workflow (`.github/workflows/release.yml`) triggers on:
 - Tag pushes matching `v*` (creates a GitHub Release with cross-platform builds)
 - `workflow_dispatch` (manual trigger)
 
-After pushing a tag or triggering manually, verify the build:
+### When to trigger a release
+Push a version tag after significant changes (bug fixes, new features, breaking
+changes) — **only after all tests pass** across all repos.
+
+```bash
+# 1. Bump version in Cargo.toml
+# 2. Commit and push the version bump
+# 3. Tag and push to trigger the build
+git tag v<NEW_VERSION>
+git push origin v<NEW_VERSION>
+```
+
+Do **not** tag for docs-only, test-only, or refactor-only changes.
+
+### Verifying builds
 ```bash
 gh run list --limit 3                # check recent runs
 gh run watch <run-id>                # watch a running build
 gh run view <run-id> --log-failed    # inspect failures
 ```
 
-If a run fails, inspect the logs, fix the issue, and push again. Iterate until the workflow passes.
+If a run fails, inspect the logs, fix the issue, and push again.
+Iterate until the workflow passes before moving on.
