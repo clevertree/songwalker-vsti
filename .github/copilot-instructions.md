@@ -52,3 +52,18 @@ cargo test    # recompiles with updated core automatically
 ```
 
 No additional build steps needed — the path dependency ensures the latest core is used.
+
+## GitHub Actions
+
+The `Build & Release` workflow (`.github/workflows/release.yml`) triggers on:
+- Tag pushes matching `v*` (creates a GitHub Release with cross-platform builds)
+- `workflow_dispatch` (manual trigger)
+
+After pushing a tag or triggering manually, verify the build:
+```bash
+gh run list --limit 3                # check recent runs
+gh run watch <run-id>                # watch a running build
+gh run view <run-id> --log-failed    # inspect failures
+```
+
+If a run fails, inspect the logs, fix the issue, and push again. Iterate until the workflow passes.
