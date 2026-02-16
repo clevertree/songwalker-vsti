@@ -3051,7 +3051,7 @@ dependencies = [
 
 [[package]]
 name = "songwalker_core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ariadne",
  "serde",
@@ -3062,7 +3062,7 @@ dependencies = [
 
 [[package]]
 name = "songwalker_vsti"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "crossbeam-channel",
