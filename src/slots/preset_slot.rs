@@ -86,8 +86,13 @@ pub struct PresetInstance {
 impl PresetInstance {
     /// Find the best matching zone for a given note and velocity.
     pub fn find_zone(&self, note: u8, velocity: f32) -> Option<&LoadedZone> {
+        self.find_zone_indexed(note, velocity).map(|(_, z)| z)
+    }
+
+    /// Find the best matching zone, returning its index and a reference.
+    pub fn find_zone_indexed(&self, note: u8, velocity: f32) -> Option<(usize, &LoadedZone)> {
         let vel_u8 = (velocity * 127.0) as u8;
-        self.zones.iter().find(|z| {
+        self.zones.iter().enumerate().find(|(_, z)| {
             note >= z.zone.key_range.low
                 && note <= z.zone.key_range.high
                 && z.zone

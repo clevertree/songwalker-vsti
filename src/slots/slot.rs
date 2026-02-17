@@ -40,6 +40,8 @@ pub struct Voice {
     pub sample_rate_ratio: f64,
     /// Transpose offset in semitones (for runner mode).
     pub transpose: i32,
+    /// Index of the loaded zone (for sampler rendering).
+    pub zone_index: Option<usize>,
 }
 
 impl Default for Voice {
@@ -57,6 +59,7 @@ impl Default for Voice {
             sample_pos: 0.0,
             sample_rate_ratio: 1.0,
             transpose: 0,
+            zone_index: None,
         }
     }
 }
@@ -295,7 +298,7 @@ impl Slot {
 
                     // If a sampler preset is loaded, configure sample playback
                     if let Some(ref preset_instance) = self.preset_state.active_preset {
-                        if let Some(zone) = preset_instance.find_zone(*note, *velocity) {
+                        if let Some((zone_idx, zone)) = preset_instance.find_zone_indexed(*note, *velocity) {
                             let pitch = zone.pitch();
                             let rate = songwalker_core::preset::sample_playback_rate(
                                 *note,
@@ -305,6 +308,7 @@ impl Slot {
                             );
                             voice.sample_rate_ratio = rate * (zone.sample_rate() as f64 / self.sample_rate as f64);
                             voice.sample_pos = 0.0;
+                            voice.zone_index = Some(zone_idx);
                         }
                     }
                 }
@@ -373,29 +377,56 @@ impl Slot {
                     break;
                 }
 
-                // Generate sample (sine oscillator as default / fallback)
-                let sample = if self.preset_state.active_preset.is_some() {
-                    // TODO: Use actual preset DSP graph (sampler/oscillator/composite)
-                    // For now, fall back to sine
-                    let s = (voice.phase * std::f64::consts::TAU).sin() as f32;
-                    voice.phase += voice.phase_inc;
-                    if voice.phase >= 1.0 {
-                        voice.phase -= 1.0;
+                // Generate sample from loaded zone (sampler) or fallback to sine
+                let (sample_l, sample_r) = match (voice.zone_index, self.preset_state.active_preset.as_ref()) {
+                    (Some(zi), Some(preset)) if zi < preset.zones.len() => {
+                        let zone = &preset.zones[zi];
+                        let pcm = &zone.pcm_data;
+                        let channels = zone.channels as usize;
+                        let total_frames = pcm.len() / channels;
+
+                        if total_frames == 0 || voice.sample_pos >= total_frames as f64 {
+                            // Past end of sample — mark voice finished
+                            voice.env_stage = 4;
+                            break;
+                        }
+
+                        // Linear interpolation between adjacent frames
+                        let pos = voice.sample_pos;
+                        let idx0 = pos as usize;
+                        let frac = (pos - idx0 as f64) as f32;
+                        let idx1 = (idx0 + 1).min(total_frames - 1);
+
+                        let (l, r) = if channels >= 2 {
+                            let l0 = pcm[idx0 * 2];
+                            let l1 = pcm[idx1 * 2];
+                            let r0 = pcm[idx0 * 2 + 1];
+                            let r1 = pcm[idx1 * 2 + 1];
+                            (l0 + (l1 - l0) * frac, r0 + (r1 - r0) * frac)
+                        } else {
+                            let s0 = pcm[idx0];
+                            let s1 = pcm[idx1];
+                            let s = s0 + (s1 - s0) * frac;
+                            (s, s)
+                        };
+
+                        voice.sample_pos += voice.sample_rate_ratio;
+                        (l, r)
                     }
-                    s
-                } else {
-                    // Pure sine fallback
-                    let s = (voice.phase * std::f64::consts::TAU).sin() as f32;
-                    voice.phase += voice.phase_inc;
-                    if voice.phase >= 1.0 {
-                        voice.phase -= 1.0;
+                    _ => {
+                        // Pure sine fallback (no preset loaded or no matching zone)
+                        let s = (voice.phase * std::f64::consts::TAU).sin() as f32;
+                        voice.phase += voice.phase_inc;
+                        if voice.phase >= 1.0 {
+                            voice.phase -= 1.0;
+                        }
+                        (s, s)
                     }
-                    s
                 };
 
-                let out = sample * env * voice.velocity;
-                left[i] += out;
-                right[i] += out;
+                let gain = env * voice.velocity;
+                left[i] += sample_l * gain;
+                right[i] += sample_r * gain;
             }
         }
     }
@@ -416,7 +447,7 @@ impl Slot {
             transport,
         );
 
-        // Render the triggered voices (same as preset rendering)
+        // Render the triggered voices using sampler or sine fallback
         let adsr = self.runner_state.envelope();
         for voice in self.voice_pool.active_voices_mut() {
             for i in 0..num_samples {
@@ -424,14 +455,53 @@ impl Slot {
                 if voice.env_stage >= 4 {
                     break;
                 }
-                let s = (voice.phase * std::f64::consts::TAU).sin() as f32;
-                voice.phase += voice.phase_inc;
-                if voice.phase >= 1.0 {
-                    voice.phase -= 1.0;
-                }
-                let out = s * env * voice.velocity;
-                left[i] += out;
-                right[i] += out;
+
+                let (sample_l, sample_r) = match (voice.zone_index, self.preset_state.active_preset.as_ref()) {
+                    (Some(zi), Some(preset)) if zi < preset.zones.len() => {
+                        let zone = &preset.zones[zi];
+                        let pcm = &zone.pcm_data;
+                        let channels = zone.channels as usize;
+                        let total_frames = pcm.len() / channels;
+
+                        if total_frames == 0 || voice.sample_pos >= total_frames as f64 {
+                            voice.env_stage = 4;
+                            break;
+                        }
+
+                        let pos = voice.sample_pos;
+                        let idx0 = pos as usize;
+                        let frac = (pos - idx0 as f64) as f32;
+                        let idx1 = (idx0 + 1).min(total_frames - 1);
+
+                        let (l, r) = if channels >= 2 {
+                            let l0 = pcm[idx0 * 2];
+                            let l1 = pcm[idx1 * 2];
+                            let r0 = pcm[idx0 * 2 + 1];
+                            let r1 = pcm[idx1 * 2 + 1];
+                            (l0 + (l1 - l0) * frac, r0 + (r1 - r0) * frac)
+                        } else {
+                            let s0 = pcm[idx0];
+                            let s1 = pcm[idx1];
+                            let s = s0 + (s1 - s0) * frac;
+                            (s, s)
+                        };
+
+                        voice.sample_pos += voice.sample_rate_ratio;
+                        (l, r)
+                    }
+                    _ => {
+                        let s = (voice.phase * std::f64::consts::TAU).sin() as f32;
+                        voice.phase += voice.phase_inc;
+                        if voice.phase >= 1.0 {
+                            voice.phase -= 1.0;
+                        }
+                        (s, s)
+                    }
+                };
+
+                let gain = env * voice.velocity;
+                left[i] += sample_l * gain;
+                right[i] += sample_r * gain;
             }
         }
     }
@@ -514,4 +584,415 @@ fn advance_envelope(voice: &mut Voice, adsr: &EnvelopeParams, sample_rate: f32) 
     };
 
     gain
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::slots::preset_slot::{LoadedZone, PresetInstance};
+    use songwalker_core::preset::{
+        AudioCodec, AudioReference, KeyRange, PresetCategory, PresetDescriptor, PresetNode,
+        SampleZone, SamplerConfig, ZonePitch,
+    };
+    use std::sync::Arc;
+
+    fn default_transport() -> TransportState {
+        TransportState::default()
+    }
+
+    /// Helper: create a test SampleZone.
+    fn test_sample_zone() -> SampleZone {
+        SampleZone {
+            key_range: KeyRange { low: 0, high: 127 },
+            velocity_range: None,
+            pitch: ZonePitch {
+                root_note: 69,
+                fine_tune_cents: 0.0,
+            },
+            sample_rate: 44100,
+            r#loop: None,
+            audio: AudioReference::External {
+                url: "test.mp3".into(),
+                codec: AudioCodec::Mp3,
+                sha256: None,
+            },
+        }
+    }
+
+    /// Helper: create a test PresetDescriptor wrapping a zone.
+    fn test_preset_descriptor(zone: SampleZone) -> PresetDescriptor {
+        PresetDescriptor {
+            id: "test-preset".into(),
+            name: "Test Preset".into(),
+            category: PresetCategory::Sampler,
+            tags: vec![],
+            metadata: None,
+            tuning: None,
+            graph: PresetNode::Sampler {
+                config: SamplerConfig {
+                    zones: vec![zone],
+                    is_drum_kit: false,
+                    envelope: None,
+                },
+            },
+        }
+    }
+
+    // ── Voice pool ──────────────────────────────────────────────
+
+    #[test]
+    fn voice_pool_allocate_and_release() {
+        let mut pool = VoicePool::new(4);
+        assert_eq!(pool.active_count(), 0);
+
+        pool.allocate(60, 0.8);
+        pool.allocate(64, 0.7);
+        assert_eq!(pool.active_count(), 2);
+
+        pool.release(60);
+        let releasing: Vec<_> = pool.voices.iter().filter(|v| v.releasing).collect();
+        assert_eq!(releasing.len(), 1);
+        assert_eq!(releasing[0].note, 60);
+    }
+
+    #[test]
+    fn voice_pool_steal_when_full() {
+        let mut pool = VoicePool::new(2);
+        pool.allocate(60, 0.8);
+        pool.allocate(64, 0.7);
+        assert_eq!(pool.active_count(), 2);
+
+        pool.allocate(67, 0.9);
+        assert_eq!(pool.active_count(), 2);
+        let has_67 = pool.voices.iter().any(|v| v.active && v.note == 67);
+        assert!(has_67, "should steal a voice for the new note");
+    }
+
+    #[test]
+    fn voice_pool_cleanup_finished() {
+        let mut pool = VoicePool::new(4);
+        pool.allocate(60, 0.8);
+        pool.allocate(64, 0.7);
+        assert_eq!(pool.active_count(), 2);
+
+        pool.voices[0].env_stage = 4;
+        pool.cleanup_finished();
+        assert_eq!(pool.active_count(), 1);
+    }
+
+    #[test]
+    fn voice_pool_release_all() {
+        let mut pool = VoicePool::new(4);
+        pool.allocate(60, 0.8);
+        pool.allocate(64, 0.7);
+        pool.allocate(67, 0.5);
+        pool.release_all();
+        let releasing = pool.voices.iter().filter(|v| v.releasing).count();
+        assert_eq!(releasing, 3);
+    }
+
+    // ── Slot creation ───────────────────────────────────────────
+
+    #[test]
+    fn slot_creation_defaults() {
+        let slot = Slot::new(0, SlotMode::Preset);
+        assert_eq!(slot.index(), 0);
+        assert_eq!(slot.mode(), SlotMode::Preset);
+        assert!(!slot.is_muted());
+        assert!(!slot.is_solo());
+        assert_eq!(slot.midi_channel(), 0);
+        assert_eq!(slot.active_voice_count(), 0);
+        assert_eq!(slot.volume(), 1.0);
+        assert_eq!(slot.pan(), 0.0);
+    }
+
+    #[test]
+    fn slot_mode_switch() {
+        let mut slot = Slot::new(0, SlotMode::Preset);
+        assert_eq!(slot.mode(), SlotMode::Preset);
+        slot.set_mode(SlotMode::Runner);
+        assert_eq!(slot.mode(), SlotMode::Runner);
+    }
+
+    // ── MIDI handling (preset mode) ─────────────────────────────
+
+    #[test]
+    fn preset_note_on_off_triggers_voice() {
+        let mut slot = Slot::new(0, SlotMode::Preset);
+        slot.initialize(44100.0);
+        let transport = default_transport();
+
+        let note_on = NoteEvent::NoteOn {
+            timing: 0,
+            voice_id: None,
+            channel: 0,
+            note: 60,
+            velocity: 0.8,
+        };
+        slot.handle_midi_event(&note_on, &transport);
+        assert_eq!(slot.active_voice_count(), 1);
+
+        let note_off = NoteEvent::NoteOff {
+            timing: 0,
+            voice_id: None,
+            channel: 0,
+            note: 60,
+            velocity: 0.0,
+        };
+        slot.handle_midi_event(&note_off, &transport);
+        // Voice is still active but in release stage
+        assert_eq!(slot.active_voice_count(), 1);
+    }
+
+    // ── Envelope ────────────────────────────────────────────────
+
+    #[test]
+    fn envelope_attack_ramp() {
+        let mut voice = Voice::default();
+        voice.active = true;
+        voice.env_stage = 0;
+        voice.env_samples = 0;
+
+        let adsr = EnvelopeParams {
+            attack_secs: 0.01,
+            decay_secs: 0.0,
+            sustain_level: 1.0,
+            release_secs: 0.01,
+        };
+        let sample_rate = 44100.0;
+        let attack_samples = (adsr.attack_secs * sample_rate) as u32;
+
+        let first = advance_envelope(&mut voice, &adsr, sample_rate);
+        assert!(first < 0.01, "initial envelope should start near 0, got {first}");
+
+        for _ in 1..attack_samples {
+            advance_envelope(&mut voice, &adsr, sample_rate);
+        }
+        assert!(voice.env_gain >= 0.99, "after attack, gain should be ~1.0, got {}", voice.env_gain);
+    }
+
+    #[test]
+    fn envelope_release_to_zero() {
+        let mut voice = Voice::default();
+        voice.active = true;
+        voice.env_stage = 2; // sustain
+        voice.env_gain = 0.8;
+
+        let adsr = EnvelopeParams {
+            attack_secs: 0.0,
+            decay_secs: 0.0,
+            sustain_level: 0.8,
+            release_secs: 0.01,
+        };
+        let sample_rate = 44100.0;
+
+        voice.releasing = true;
+        voice.env_stage = 3;
+        voice.env_samples = 0;
+
+        let release_samples = (adsr.release_secs * sample_rate) as u32;
+        let mut last_gain = 1.0;
+        for _ in 0..release_samples + 10 {
+            let g = advance_envelope(&mut voice, &adsr, sample_rate);
+            if voice.env_stage >= 4 {
+                break;
+            }
+            assert!(g <= last_gain + 0.001, "release should be monotonically decreasing");
+            last_gain = g;
+        }
+        assert_eq!(voice.env_stage, 4, "voice should be off after release");
+    }
+
+    // ── Rendering ───────────────────────────────────────────────
+
+    #[test]
+    fn render_sine_fallback_produces_audio() {
+        let mut slot = Slot::new(0, SlotMode::Preset);
+        slot.initialize(44100.0);
+        let transport = default_transport();
+
+        let note_on = NoteEvent::NoteOn {
+            timing: 0,
+            voice_id: None,
+            channel: 0,
+            note: 69,
+            velocity: 1.0,
+        };
+        slot.handle_midi_event(&note_on, &transport);
+
+        let num_samples = 256;
+        let mut left = vec![0.0f32; num_samples];
+        let mut right = vec![0.0f32; num_samples];
+        slot.render(&mut left, &mut right, num_samples, 44100.0, &transport);
+
+        let energy: f32 = left.iter().map(|s| s * s).sum();
+        assert!(energy > 0.0, "sine fallback should produce non-zero audio");
+    }
+
+    #[test]
+    fn render_sampler_reads_pcm_data() {
+        let mut slot = Slot::new(0, SlotMode::Preset);
+        slot.initialize(44100.0);
+        let transport = default_transport();
+
+        // Create a simple mono preset with a 440 Hz sine at 44100 Hz
+        let num_pcm_samples = 44100;
+        let pcm: Vec<f32> = (0..num_pcm_samples)
+            .map(|i| (i as f32 / 44100.0 * 440.0 * std::f32::consts::TAU).sin())
+            .collect();
+
+        let zone = test_sample_zone();
+        let loaded_zone = LoadedZone {
+            zone,
+            pcm_data: Arc::from(pcm),
+            channels: 1,
+        };
+
+        let preset_instance = PresetInstance {
+            descriptor: test_preset_descriptor(test_sample_zone()),
+            zones: vec![loaded_zone],
+        };
+
+        slot.preset_state_mut().load_preset("test/preset".into(), preset_instance);
+
+        let note_on = NoteEvent::NoteOn {
+            timing: 0, voice_id: None, channel: 0, note: 69, velocity: 1.0,
+        };
+        slot.handle_midi_event(&note_on, &transport);
+
+        let num_samples = 256;
+        let mut left = vec![0.0f32; num_samples];
+        let mut right = vec![0.0f32; num_samples];
+        slot.render(&mut left, &mut right, num_samples, 44100.0, &transport);
+
+        let energy: f32 = left.iter().map(|s| s * s).sum();
+        assert!(energy > 0.0, "sampler should produce non-zero audio from PCM data");
+
+        let max_abs = left.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        assert!(max_abs > 0.01, "peak amplitude should be audible, got {max_abs}");
+    }
+
+    #[test]
+    fn render_sampler_stereo() {
+        let mut slot = Slot::new(0, SlotMode::Preset);
+        slot.initialize(44100.0);
+        let transport = default_transport();
+
+        let num_frames = 4410;
+        let mut pcm = Vec::with_capacity(num_frames * 2);
+        for i in 0..num_frames {
+            let s = (i as f32 / 44100.0 * 440.0 * std::f32::consts::TAU).sin();
+            pcm.push(s);   // left
+            pcm.push(-s);  // right (inverted)
+        }
+
+        let zone = test_sample_zone();
+        let loaded_zone = LoadedZone {
+            zone,
+            pcm_data: Arc::from(pcm),
+            channels: 2,
+        };
+
+        let preset_instance = PresetInstance {
+            descriptor: test_preset_descriptor(test_sample_zone()),
+            zones: vec![loaded_zone],
+        };
+
+        slot.preset_state_mut().load_preset("test/stereo".into(), preset_instance);
+
+        let note_on = NoteEvent::NoteOn {
+            timing: 0, voice_id: None, channel: 0, note: 69, velocity: 1.0,
+        };
+        slot.handle_midi_event(&note_on, &transport);
+
+        let num_samples = 128;
+        let mut left = vec![0.0f32; num_samples];
+        let mut right = vec![0.0f32; num_samples];
+        slot.render(&mut left, &mut right, num_samples, 44100.0, &transport);
+
+        let energy_l: f32 = left.iter().map(|s| s * s).sum();
+        let energy_r: f32 = right.iter().map(|s| s * s).sum();
+        assert!(energy_l > 0.0, "left channel should have audio");
+        assert!(energy_r > 0.0, "right channel should have audio");
+    }
+
+    #[test]
+    fn sampler_voice_ends_past_sample_length() {
+        let mut slot = Slot::new(0, SlotMode::Preset);
+        slot.initialize(44100.0);
+        let transport = default_transport();
+
+        // Very short sample: only 100 frames
+        let pcm: Vec<f32> = (0..100).map(|i| i as f32 / 100.0).collect();
+
+        let zone = test_sample_zone();
+        let loaded_zone = LoadedZone {
+            zone,
+            pcm_data: Arc::from(pcm),
+            channels: 1,
+        };
+
+        let preset_instance = PresetInstance {
+            descriptor: test_preset_descriptor(test_sample_zone()),
+            zones: vec![loaded_zone],
+        };
+
+        slot.preset_state_mut().load_preset("test/short".into(), preset_instance);
+
+        let note_on = NoteEvent::NoteOn {
+            timing: 0, voice_id: None, channel: 0, note: 69, velocity: 1.0,
+        };
+        slot.handle_midi_event(&note_on, &transport);
+        assert_eq!(slot.active_voice_count(), 1);
+
+        let mut left = vec![0.0f32; 256];
+        let mut right = vec![0.0f32; 256];
+        slot.render(&mut left, &mut right, 256, 44100.0, &transport);
+        assert_eq!(slot.active_voice_count(), 0, "voice should be cleaned up after sample ends");
+    }
+
+    // ── Transport ───────────────────────────────────────────────
+
+    #[test]
+    fn transport_beats_to_samples() {
+        let t = TransportState {
+            bpm: 120.0,
+            sample_rate: 44100.0,
+            ..Default::default()
+        };
+        let samples = t.beats_to_samples(1.0);
+        assert!((samples - 22050.0).abs() < 1.0, "1 beat at 120 BPM should be ~22050 samples, got {samples}");
+    }
+
+    // ── MIDI utility ────────────────────────────────────────────
+
+    #[test]
+    fn midi_to_freq_a4() {
+        let freq = crate::midi::midi_to_freq(69);
+        assert!((freq - 440.0).abs() < 0.01, "MIDI 69 should be 440 Hz, got {freq}");
+    }
+
+    #[test]
+    fn midi_to_freq_octave() {
+        let a3 = crate::midi::midi_to_freq(57);
+        let a4 = crate::midi::midi_to_freq(69);
+        assert!((a4 / a3 - 2.0).abs() < 0.01, "octave should double frequency");
+    }
+
+    // ── Mute / Solo ─────────────────────────────────────────────
+
+    #[test]
+    fn slot_mute_solo_setters() {
+        let mut slot = Slot::new(0, SlotMode::Preset);
+        slot.set_muted(true);
+        assert!(slot.is_muted());
+        slot.set_solo(true);
+        assert!(slot.is_solo());
+        slot.set_midi_channel(5);
+        assert_eq!(slot.midi_channel(), 5);
+        slot.set_midi_channel(20);
+        assert_eq!(slot.midi_channel(), 16);
+        slot.set_midi_channel(-1);
+        assert_eq!(slot.midi_channel(), 0);
+    }
 }
