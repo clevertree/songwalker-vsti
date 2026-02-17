@@ -2,7 +2,7 @@
 
 ## Overview
 
-A cross-platform VST3/CLAP instrument plugin that brings the SongWalker preset library and `.sw` playback engine into any DAW. Every slot in the plugin is backed by a `.sw` source file that **re-executes on every MIDI note** — like a React component re-rendering. A simple preset is just a 2-line `.sw` program (`loadPreset` + play at `midi.note`). Advanced use cases — arpeggiation, harmonization, drum patterns, generative music — are achieved by editing that same `.sw` source to add `state`, `sequence`, control flow, and multiple presets.
+A cross-platform VST3/CLAP instrument plugin that brings the SongWalker preset library and `.sw` playback engine into any DAW. Every slot in the plugin is backed by a `.sw` source file that **re-executes on every MIDI note** — like a React component re-rendering. The built-in `song` variable carries the previous execution's state (active voices, timing, user properties), enabling pitch bending, loop continuation, chord matching, and other inter-note behaviors. A simple preset is just a 2-line `.sw` program. Advanced behavior is achieved by inspecting `song` and adding logic.
 
 The embedded UI reuses the **songwalker-js** editor and preset browser (same Monaco-based code editor, same preset loader, same visualizer) so the experience is identical across web and plugin contexts.
 
@@ -15,10 +15,10 @@ The embedded UI reuses the **songwalker-js** editor and preset browser (same Mon
 | **Max performance** | **Primary goal.** Zero-allocation audio path. Pure Rust DSP with `#[target_feature]` SIMD (SSE2/NEON). Lock-free audio thread. Pre-allocated voice pools. Sample pre-decode to native f32 at host sample rate. Batch voice rendering (process all voices of the same preset type together for cache locality). Profile-guided optimization (`cargo pgo`). |
 | **Max compatibility** | VST3 + CLAP formats. Windows, macOS (x86_64 + aarch64), Linux. All major DAWs (Ableton, FL Studio, Bitwig, Reaper, Logic, Cubase, Studio One). |
 | **Multi-timbral** | Kontakt-style multi-slot architecture. Multiple presets loaded simultaneously in named slots. Required for combination presets (orchestra, quartet, layered stacks). Each slot has its own MIDI channel or shares the global channel. |
-| **Unified .sw slots** | Every slot is a `.sw` program that re-executes per MIDI note. "Load preset and play" is a 2-line default `.sw`. Users edit to add arpeggiation, harmonization, sequencing — no mode switches. Percussion presets play by name (`kick /4`). Melodic presets take pitch in parens (`piano(midi.note)`). |
+| **Unified .sw slots** | Every slot is a `.sw` program that re-executes per MIDI note. `song` connects consecutive firings (voices, timing, user properties). "Load preset and play" is a 2-line default `.sw`. Users edit to add pitch bending, chord matching, drum loops, arpeggiation — no mode switches. Percussion presets play by name (`kick /4`). Melodic presets take pitch in parens (`piano(midi.note)`). |
 | **UI parity with web** | Reuse **songwalker-js** components: same Monaco-based code editor, same preset browser/loader (PresetBrowser, PresetLoader), same visualizer. egui hosts an embedded webview or native port of these components. |
 | **Remote preset loading** | Fetch presets from `https://clevertree.github.io/songwalker-library` (or configurable mirror). Cache library indexes and used presets on demand. Optional "Download for Offline" to bulk-cache entire libraries. |
-| **Songwalker integration** | Compile and execute `.sw` programs reactively. Every slot compiles its `.sw` source via songwalker-core. Each MIDI note triggers full re-execution. `state` variables persist across firings. `sequence` blocks continue from saved cursor. `midi.*` / `transport.*` injected from host. |
+| **Songwalker integration** | Compile and execute `.sw` programs reactively. Every slot compiles its `.sw` source via songwalker-core. Each MIDI note triggers full re-execution with `song` = previous state snapshot. `midi.*` / `transport.*` injected from host. |
 | **Free & open source** | GPLv3 (or similar copyleft). Donation-based sustainability. No paywalls, no license keys. |
 
 ---
@@ -117,14 +117,55 @@ no `on noteOn` wrapper; the file body IS the note handler.
 1. User selects a preset from the browser → the plugin generates a **default `.sw`**.
 2. The `.sw` source is visible and editable in the code editor at all times.
 3. Each MIDI Note On triggers a **full top-to-bottom execution** of the `.sw` file.
-4. Multiple held notes = multiple parallel executions (polyphonic).
-5. When `midi.gate` goes false (Note Off), `while (midi.gate)` loops exit and voices release.
-6. `state` variables persist across note firings. Everything else re-initializes.
-7. `sequence` blocks continue from their saved cursor across note firings.
-8. `on cc(n)` / `on pitchBend` auxiliary handlers react to non-note MIDI events.
+4. The built-in `song` variable contains the **previous execution's state** — or `undefined`
+   on the very first firing. This is how consecutive notes communicate.
+5. `song` exposes the previous firing's active voices, timing, elapsed time, and any
+   user-defined properties. The current `.sw` can inspect it, extract voices to manipulate
+   (pitch bend, release, extend), or ignore it entirely.
+6. When `midi.gate` goes false (Note Off), `while (midi.gate)` loops exit and voices release.
+7. `on cc(n)` / `on pitchBend` auxiliary handlers react to non-note MIDI events.
 
 This means a "simple preset player" and a "complex MIDI-reactive sequencer" are the
 same system — the only difference is how much `.sw` code the user writes.
+
+### The `song` Variable
+
+`song` is the core mechanism for inter-note communication. It is a read-only snapshot of
+the previous note firing's execution state, passed into the current firing automatically.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `song` | `object \| undefined` | `undefined` on first firing. Object on consecutive firings. |
+| `song.voices` | `Voice[]` | Active voices from the previous firing (still sounding). |
+| `song.note` | `int` | The `midi.note` that triggered the previous firing. |
+| `song.velocity` | `float` | The `midi.velocity` of the previous firing. |
+| `song.elapsed` | `float` | Seconds elapsed since the previous firing started. |
+| `song.beat` | `float` | Beats elapsed since the previous firing started. |
+| `song.cursor` | `int` | Position in any looping sequence (for continuation). |
+| `song.*` | `any` | User-defined properties set via `song.myProp = value` in the previous firing. |
+
+**Voice objects** from `song.voices` can be manipulated:
+
+| Method / Property | Description |
+|-------------------|-------------|
+| `voice.pitchBend(targetNote, duration)` | Glide the voice's pitch to `targetNote` over `duration` beats. |
+| `voice.release()` | Trigger the voice's release envelope (fade out naturally). |
+| `voice.stop()` | Hard-stop the voice immediately (no release). |
+| `voice.extend(duration)` | Extend the voice's sustain by `duration` beats. |
+| `voice.note` | The MIDI note the voice is playing. |
+| `voice.frequency` | Current frequency in Hz. |
+| `voice.active` | `true` if voice is still sounding. |
+
+**Setting properties for the next firing:**
+
+The current firing can store arbitrary data for its successor by assigning to `song`:
+
+```sw
+song.myCounter = (song.myCounter ?? 0) + 1
+song.lastChord = [C4, E4, G4]
+```
+
+These are available as `song.myCounter` and `song.lastChord` in the next firing.
 
 ### Default .sw Generation
 
@@ -135,8 +176,8 @@ const piano = loadPreset("FluidR3_GM/Acoustic Grand Piano")
 piano(midi.note) *midi.velocity
 ```
 
-That's it — a 2-line program. Each MIDI note fires the file, which plays the preset
-at the incoming pitch and velocity. The user can immediately modify it.
+That's it — a 2-line program. `song` is unused (ignored), so each note plays independently.
+The user can immediately modify it to inspect `song` and add inter-note behavior.
 
 ---
 
@@ -236,56 +277,41 @@ Injected from the host transport. The `.sw` can override any of these explicitly
 | `transport.playing` | `bool` | Host play state | false |
 | `transport.beat` | `float` | Current beat position | 0.0 |
 
-### State Variables
+### Inter-Note Communication via `song`
 
-Variables declared with `state` persist across note firings — like React's `useState`.
-Regular `let` and `const` are re-initialized on each firing.
+The `song` variable replaces explicit state management. The previous firing's entire
+context — voices, timing, user properties — is available to the current firing.
 
 ```sw
-state let step = 0           // initialized once, persists across firings
-const pattern = [0, 4, 7]   // re-initialized each firing (same value, no cost)
+const piano = loadPreset("FluidR3_GM/Acoustic Grand Piano")
 
-piano(midi.note + pattern[step % pattern.length]) *midi.velocity
-step += 1
+if (song) {
+    // Consecutive note: pitch-bend the previous voice to the new note
+    song.voices[0].pitchBend(midi.note, 1/4)
+} else {
+    // First note: play normally
+    piano(midi.note) *midi.velocity
+}
 ```
 
-### Sequence Blocks
+For simple presets that don't inspect `song`, each note fires independently (the default).
+For advanced behavior, `song` gives full access to the previous execution's state.
 
-A `sequence` block remembers its cursor position across note firings. The pattern plays
-in real-time with actual durations, continuing from where it left off.
+### Sequence Continuation via `song.cursor`
+
+Looping patterns use `song.cursor` to continue from where the last firing left off.
+This replaces the `sequence` block concept — it's just a property on `song`.
 
 ```sw
 const kick  = loadPreset("FluidR3_GM/Standard Kit/Kick")
 const hat   = loadPreset("FluidR3_GM/Standard Kit/Closed Hi-Hat")
 const snare = loadPreset("FluidR3_GM/Standard Kit/Snare")
 
-sequence {
-    while (midi.gate) {
-        kick /4
-        hat /8
-        hat /8
-        snare /4
-        hat /8
-        hat /8
-    }
-}
-```
+const pattern = [kick, hat, hat, snare, hat, hat]
+const step = song ? song.cursor : 0
 
-- **First note press:** starts the pattern from the top, plays in real-time.
-- **Note release:** `midi.gate` → false, loop exits, cursor position saves.
-- **Next note press:** resumes from saved cursor, loop restarts with `midi.gate` = true.
-
-Without `while`, the sequence advances one event per note firing (step sequencer mode):
-
-```sw
-sequence {
-    kick         // firing 1
-    hat          // firing 2
-    hat          // firing 3
-    snare        // firing 4
-    hat          // firing 5
-    hat          // firing 6 → wraps back to start
-}
+pattern[step % pattern.length] /8
+song.cursor = step + 1
 ```
 
 ### Auxiliary Event Handlers
@@ -312,13 +338,13 @@ These run alongside the main body, not instead of it.
 
 ### Polyphonic Execution
 
-Each MIDI note triggers an independent execution of the entire `.sw` file. If the user
-holds three notes simultaneously, three execution contexts run in parallel, each with
-their own `midi.note`, `midi.velocity`, and `midi.gate` values.
+Each MIDI note triggers an independent execution of the entire `.sw` file. The `song`
+variable connects consecutive firings in a chain: each firing sees the previous one's
+state. If the `.sw` inspects `song` and decides not to start a new voice (e.g., it
+pitch-bends an existing voice instead), the polyphony stays the same.
 
-`state` variables and `sequence` cursors are **shared** across all contexts — they are
-slot-level persistent state, not per-note state. This is how an arpeggiator can advance
-a shared step counter regardless of which note triggers it.
+If the `.sw` ignores `song` (like the default 2-line preset), each note creates an
+independent voice — standard polyphonic behavior.
 
 ### Control Flow (JavaScript-style)
 
@@ -381,52 +407,125 @@ const scale = [0, 2, 4, 5, 7, 9, 11]     // major scale intervals
 ### Example 1: Default Preset (auto-generated)
 
 The simplest `.sw` — a 2-line program auto-generated when the user picks a preset.
-Each MIDI note fires the entire file, which plays the preset at the input pitch.
+`song` is not inspected, so every note plays independently.
 
 ```sw
 const piano = loadPreset("FluidR3_GM/Acoustic Grand Piano")
 piano(midi.note) *midi.velocity
 ```
 
-### Example 2: Arpeggiator
+### Example 2: Pitch Bend on Consecutive Notes
 
-Each note press plays the next note in the pattern. `state` persists the step counter.
+The first note plays normally. Consecutive notes don't start a new voice — instead they
+grab the active voice from the previous firing and pitch-bend it down to the new frequency.
 
 ```sw
 const synth = loadPreset("FluidR3_GM/Synth Strings 1")
-const pattern = [0, 4, 7, 12, 7, 4]  // up-down triad + octave
-state let step = 0
+const bendTime = 1/4  // glide over a quarter note
 
-synth(midi.note + pattern[step % pattern.length]) *midi.velocity
-step += 1
+if (song && song.voices.length > 0) {
+    // Consecutive note: bend the previous voice to the new pitch
+    song.voices[0].pitchBend(midi.note, bendTime)
+} else {
+    // First note: play normally
+    synth(midi.note) *midi.velocity
+}
 ```
 
-### Example 3: Drum Kit (percussion preset-as-note)
+**What happens:**
+1. Press C4 → `song` is `undefined` → plays C4 normally.
+2. Press E4 (while C4 is still sounding) → `song.voices[0]` is the C4 voice → bends from C4 to E4 over 1/4 beat.
+3. Press G4 → `song.voices[0]` is now the voice at E4 → bends from E4 to G4.
+4. Release all keys, wait → next press starts fresh (`song` reset after gap).
 
-Percussion presets played by name — no pitch mapping needed. The `sequence` block
-continues from its saved cursor across note firings.
+### Example 3: Close Harmony (Chord Matching)
+
+Each incoming MIDI note is matched to the closest **lower** note of a configurable chord.
+`song` is not used — each note is independent, matching the MIDI note's duration.
+
+```sw
+const piano = loadPreset("FluidR3_GM/Acoustic Grand Piano")
+const baseNote = C3                         // configurable root
+const chord = [0, 4, 7]                     // major triad intervals
+
+// Find the closest lower chord tone to the incoming note
+const interval = (midi.note - baseNote) % 12
+let bestMatch = chord[0]
+for i in 0..chord.length {
+    if (chord[i] <= interval) {
+        bestMatch = chord[i]
+    }
+}
+const harmonyNote = midi.note - (interval - bestMatch)
+
+// Play both the original and the harmony below it
+piano(midi.note) *midi.velocity
+piano(harmonyNote) *(midi.velocity * 0.7)
+```
+
+**What happens:**
+1. Base note is C3, chord is C major (C, E, G).
+2. Press D4 → closest lower chord tone is C → plays D4 + C4.
+3. Press F4 → closest lower chord tone is E → plays F4 + E4.
+4. Press A4 → closest lower chord tone is G → plays A4 + G4.
+5. Each note pair sustains for the duration of the MIDI key press.
+
+### Example 4: Drum Loop with Gap Tolerance
+
+A drum pattern starts on the first note and loops continuously as long as MIDI notes
+keep firing within a configurable gap. If the gap is exceeded, the drums stop
+(voices release naturally, not hard-cut). On the next note, the loop restarts.
 
 ```sw
 const kick  = loadPreset("FluidR3_GM/Standard Kit/Kick")
 const hat   = loadPreset("FluidR3_GM/Standard Kit/Closed Hi-Hat")
 const snare = loadPreset("FluidR3_GM/Standard Kit/Snare")
+const gapBeats = 2  // stop if no note fires within 2 beats
 
-sequence {
-    while (midi.gate) {
-        kick /4
-        hat /8
-        hat /8
-        snare *0.9 /4
-        hat /8
-        hat /8
-    }
+if (song && song.elapsed < gapBeats * (60 / transport.bpm)) {
+    // Within gap tolerance: continue the loop, don't restart
+    song.cursor = song.cursor  // preserve cursor from previous firing
+} else {
+    // First note or gap exceeded: start the loop fresh
+    song.cursor = 0
+}
+
+// Play the drum loop from the current cursor position
+while (midi.gate) {
+    kick /4
+    hat /8
+    hat /8
+    snare *0.9 /4
+    hat /8
+    hat /8
+    song.cursor += 6  // track position for next firing
 }
 ```
 
-### Example 4: Harmonic Accompaniment
+**What happens:**
+1. Press first key → `song` is `undefined` → cursor starts at 0, loop begins.
+2. Release key → `while (midi.gate)` exits, voices release, cursor saves position.
+3. Press another key within 2 beats → `song.elapsed` < gap → loop resumes from cursor.
+4. Press another key within 2 beats → same, seamless continuation.
+5. Wait 3 beats → gap exceeded → next press restarts the loop from the top.
+6. Voices from the old loop are not hard-stopped — they complete their release envelope.
 
-Play the input note plus a diatonic third. The entire file runs per note — both the
-original and the harmony play simultaneously.
+### Example 5: Arpeggiator (Step Sequencer)
+
+Each note press plays the next note in an arpeggio pattern. `song.cursor` tracks position.
+
+```sw
+const synth = loadPreset("FluidR3_GM/Synth Strings 1")
+const pattern = [0, 4, 7, 12, 7, 4]  // up-down triad + octave
+const step = song ? (song.cursor + 1) % pattern.length : 0
+
+synth(midi.note + pattern[step]) *midi.velocity
+song.cursor = step
+```
+
+### Example 6: Harmonic Accompaniment
+
+Play the input note plus a diatonic third. `song` is not used — pure calculation.
 
 ```sw
 const piano = loadPreset("FluidR3_GM/Acoustic Grand Piano")
@@ -445,33 +544,31 @@ if (idx >= 0) {
 }
 ```
 
-### Example 5: Velocity-Layered Drum Pattern
+### Example 7: Velocity-Layered Drums
 
-Different instruments triggered based on velocity zones with a continuing sequence.
+Different instruments triggered based on velocity, with loop continuation via `song`.
 
 ```sw
 const kick  = loadPreset("FluidR3_GM/Standard Kit/Kick")
 const snare = loadPreset("FluidR3_GM/Standard Kit/Snare")
 const hat   = loadPreset("FluidR3_GM/Standard Kit/Closed Hi-Hat")
 
-sequence {
-    while (midi.gate) {
-        if (midi.velocity > 0.5) {
-            kick *midi.velocity /4
-            hat *0.3 /8
-            hat *0.3 /8
-            snare *midi.velocity /4
-            hat *0.3 /8
-            hat *0.3 /8
-        } else {
-            hat *midi.velocity /8
-            hat *(midi.velocity * 0.5) /8
-        }
+while (midi.gate) {
+    if (midi.velocity > 0.5) {
+        kick *midi.velocity /4
+        hat *0.3 /8
+        hat *0.3 /8
+        snare *midi.velocity /4
+        hat *0.3 /8
+        hat *0.3 /8
+    } else {
+        hat *midi.velocity /8
+        hat *(midi.velocity * 0.5) /8
     }
 }
 ```
 
-### Example 6: Generative Texture
+### Example 8: Generative Texture
 
 Randomized ambient notes that evolve while the key is held.
 
@@ -488,7 +585,7 @@ while (midi.gate) {
 }
 ```
 
-### Example 7: CC Filter Control
+### Example 9: CC Filter Control
 
 Map mod wheel (CC1) to filter cutoff using an auxiliary handler.
 
@@ -504,24 +601,10 @@ on cc(1) {
 }
 ```
 
-### Example 8: Step Sequencer
-
-Each note press fires the next step. No `while` loop, no real-time playback —
-the `sequence` advances one event per note firing.
-
-```sw
-const synth = loadPreset("FluidR3_GM/Lead 1 (square)")
-const notes = [C4, E4, G4, B4, C5, B4, G4, E4]
-state let step = 0
-
-synth(notes[step % notes.length]) *midi.velocity
-step += 1
-```
-
 **State Serialization:**
 The DAW project saves: the full `.sw` source text, all resolved preset identifiers,
-parameter overrides, `state` variable values, `sequence` cursor positions. On reload,
-code is recompiled and presets reloaded from cache.
+parameter overrides, current `song` state (active voices, cursor, user properties).
+On reload, code is recompiled and presets reloaded from cache.
 
 ---
 
@@ -704,9 +787,9 @@ fn process(&mut self, buffer: &mut Buffer, context: &mut impl ProcessContext) {
     //    - Route by channel to target slot(s)
     //    - Note On → re-execute the entire .sw file for that slot
     //      (injects midi.note, midi.velocity, midi.frequency, midi.gate=true)
-    //      (state variables and sequence cursors persist from prior firings)
+    //      (song = snapshot of previous execution: voices, timing, user props)
     //    - Note Off → set midi.gate=false on the corresponding context
-    //      (while/sequence loops exit; voices enter release)
+    //      (while loops exit; voices enter release)
     //    - CC / Pitch Bend → fire auxiliary on cc/pitchBend handlers
     //    - Inject host BPM / time sig into transport.* variables
     // 4. For each slot, advance all active execution contexts:
@@ -732,24 +815,28 @@ fn process(&mut self, buffer: &mut Buffer, context: &mut impl ProcessContext) {
 
 **.sw Execution Model (Reactive Re-Execution):**
 - The `.sw` is compiled once (on edit or preset change) → produces a compiled program
-  with `state` variable slots, `sequence` cursor slots, and auxiliary `on cc`/`on pitchBend` handlers.
+  with auxiliary `on cc`/`on pitchBend` handlers.
 - Each MIDI Note On triggers a **full top-to-bottom re-execution** of the `.sw` file in a new
   **execution context** with:
   - Its own `midi.*` variable state (note, velocity, frequency, gate=true).
-  - Access to shared `state` variables (persist across firings, shared across all contexts).
-  - Access to shared `sequence` cursors (continue from last position).
+  - `song` = snapshot of the previous execution's state (voices, timing, user-defined
+    properties). `undefined` on first firing.
   - Injected `transport.*` from host (BPM, time sig, beat position).
+- The `.sw` can inspect `song` to access previous voices (`song.voices`), timing
+  (`song.elapsed`, `song.beat`), cursor position (`song.cursor`), and any user-defined
+  properties. It can manipulate previous voices (pitch bend, release, extend).
 - The context runs the entire file body. `while (midi.gate)` loops keep running across
   `process()` calls until the corresponding Note Off sets `gate=false`.
 - Preset identifiers in note position (e.g., `kick /4`, `piano(midi.note)`) trigger playback
   using the preset-as-note syntax — no `.play()` method needed.
 - On MIDI Note Off: `midi.gate` is set to `false` on the matching context.
   The `on noteOff` auxiliary handler (if any) is executed. Active voices enter release.
-- When all voices in a context finish their release, the context is returned to the pool.
-- `state` variables and `sequence` cursors survive context cleanup — they are slot-level state.
+- When all voices in a context finish their release, the context state becomes the `song`
+  snapshot for the next firing.
+- After a configurable idle gap (no new notes), `song` resets to `undefined`.
 
 **Multi-Slot Rendering:**
-- Each slot is processed independently (own voice pool, own .sw state/sequences).
+- Each slot is processed independently (own voice pool, own `song` state).
 - Slots are mixed into the output buffer in order.
 - Per-slot volume/pan applied before mix.
 - Future: per-slot output routing to DAW aux buses (VST3 multi-out).
@@ -843,7 +930,7 @@ Integrated into CI via `cargo pgo`.
 | Component | Notes |
 |-----------|-------|
 | Lexer + Parser + AST | Full `.sw` compilation pipeline, extended with reactive MIDI syntax |
-| Compiler | `compile()` → compiled program with `state` slots, `sequence` cursors, auxiliary `on cc`/`on pitchBend` handlers |
+| Compiler | `compile()` → compiled program with file body (runs per Note On) and auxiliary `on cc`/`on pitchBend` handlers |
 | `PresetDescriptor` / `PresetNode` types | Deserialization of remote preset JSON |
 | DSP engine (`dsp/` module) | Oscillator, Envelope, Filter, Sampler, Mixer, Composite, Voice |
 | Tuning system | `TuningInfo`, pitch detection, `noteToFreq` / `freqToNote` |
@@ -853,15 +940,15 @@ Integrated into CI via `cargo pgo`.
 
 | Component | Notes |
 |-----------|-------|
-| Reactive `.sw` runtime | Whole-file re-execution per note, `state` persistence, `sequence` cursors, preset-as-note syntax, auxiliary `on cc`/`on pitchBend` handlers |
+| Reactive `.sw` runtime | Whole-file re-execution per note, `song` variable (previous execution state — voices, timing, user props), preset-as-note syntax, auxiliary `on cc`/`on pitchBend` handlers |
 | MIDI input handling | Route by channel to slots. Note On spawns `.sw` execution context. Note Off sets `midi.gate=false`. |
 | DAW transport sync | Read host BPM, time sig, play state, loop points. Inject as `transport.*` variable defaults. |
 | Multi-slot manager | Kontakt-style slot rack. Add/remove/reorder slots. Per-slot MIDI channel, volume, pan. Every slot is a `.sw` source. |
 | Voice allocator | Per-slot polyphonic voice pools with stealing. Batch rendering for cache locality. |
-| Execution context pool | Pre-allocated per-note contexts (midi.* state, program cursor, voice refs). Polyphonic — one per held note. Shared `state` variables and `sequence` cursors at slot level. |
+| Execution context pool | Pre-allocated per-note contexts (midi.* state, song snapshot, program cursor, voice refs). Each context receives `song` = previous execution's state. |
 | HTTP preset fetcher | Async remote loading (reuses songwalker-js PresetLoader where possible). On-demand + "Download for Offline". |
 | Disk cache | Cache indexes always, presets on use. LRU eviction. Offline library download. |
-| Plugin state save/restore | DAW project serialization (all slot `.sw` sources, parameter overrides, `state` variable values, `sequence` cursor positions). |
+| Plugin state save/restore | DAW project serialization (all slot `.sw` sources, parameter overrides, current `song` state snapshots). |
 | SIMD + perf utilities | Batch voice processing, SIMD sample interpolation, pre-allocated pools. |
 | UI (egui + webview) | Slot rack in egui. Preset browser + code editor via embedded webview running songwalker-js components. |
 
@@ -870,17 +957,17 @@ Integrated into CI via `cargo pgo`.
 The core needs extension for MIDI-reactive `.sw`:
 
 1. **Preset-as-note syntax in lexer/parser** — Allow preset identifiers in note position: `kick /4` (default pitch), `piano(C4) /4` (explicit pitch), `piano(midi.note) *midi.velocity` (computed pitch). Parser treats identifier-in-note-position as a preset play. Identifier followed by `(expr)` = preset + pitch.
-2. **`state` keyword** — New `state let x = 0` declaration. Variables marked `state` are allocated in slot-level persistent storage, not per-execution-context storage. Initialized once, survive across note firings.
-3. **`sequence` blocks** — New `sequence { ... }` block type. Cursor position persists at slot level. Without `while`, advances one event per note firing (step sequencer). With `while (midi.gate)`, plays in real-time and suspends on note-off.
+2. **`song` built-in variable** — Automatically injected. Contains the previous execution's state snapshot (voices, timing, cursor, user-defined properties). `undefined` on first firing. Writable for user properties (`song.cursor = n`, `song.myProp = value`). Read-only for system properties (`song.voices`, `song.elapsed`, `song.note`).
+3. **Voice manipulation API** — `song.voices[n].pitchBend(target, duration)`, `.release()`, `.stop()`, `.extend(duration)`. Allows the current `.sw` to modify voices from the previous firing.
 4. **Auxiliary `on` handlers** — `on cc(n) { }`, `on pitchBend { }`, `on noteOff { }` for non-note MIDI events. The file body itself is the Note On handler (no `on noteOn` wrapper).
 5. **`midi.*` and `transport.*` variables** — Injected read-only variables. `midi.note`, `midi.velocity`, `midi.frequency`, `midi.gate`, `midi.channel`, `midi.pitchBend`, `midi.cc[n]`. `transport.bpm`, `transport.timeSigNum`, etc.
 6. **Control flow extensions** — `if/else`, `while`, arithmetic/comparison/logical operators, array literals, ternary operator, built-in functions (`noteToFreq`, `freqToNote`, `interval`, `scaleNote`, `random`, `randomInt`).
-7. **Compiler: reactive program model** — `compile()` returns a compiled program suitable for per-note re-execution: the main body (runs per Note On), `state` variable descriptors, `sequence` cursor descriptors, and auxiliary handler blocks.
-8. **Runtime variable injection** — The execution engine accepts a `MidiContext` struct (`note`, `velocity`, `frequency`, `gate`, `channel`, `pitchBend`, `cc[]`) and a `TransportContext` struct (`bpm`, `timeSigNum`, `timeSigDen`, `sampleRate`, `playing`, `beat`).
+7. **Compiler: reactive program model** — `compile()` returns a compiled program suitable for per-note re-execution: the main body (runs per Note On) and auxiliary handler blocks.
+8. **Runtime variable injection** — The execution engine accepts a `MidiContext` struct (`note`, `velocity`, `frequency`, `gate`, `channel`, `pitchBend`, `cc[]`), a `TransportContext` struct (`bpm`, `timeSigNum`, `timeSigDen`, `sampleRate`, `playing`, `beat`), and a `SongSnapshot` (previous execution state, or null).
 9. **Feature-gate WASM exports** — `#[cfg(target_arch = "wasm32")]` on wasm-bindgen items so they don't compile for native VSTi builds. (May already be gated.)
 10. **Expose incremental rendering API** — Current `render_song_samples()` renders the entire song at once. The VSTi needs a `render_block(events, num_samples)` style API for real-time buffer-by-buffer rendering.
 11. **Sample rate propagation** — Ensure all DSP nodes accept runtime sample rate (already parameterized in renderer, verify for individual nodes).
-12. **Voice pool integration** — The existing `Voice` type may need adaptation for a shared pool with steal/release semantics.
+12. **Voice pool integration** — The existing `Voice` type may need adaptation for a shared pool with steal/release semantics. Voices must support `pitchBend()` and `extend()` operations from external callers.
 
 ---
 
@@ -962,8 +1049,10 @@ nih-plug's `cargo xtask bundle` produces correctly structured plugin bundles:
 ### Phase 4 — Reactive .sw Runtime (Weeks 8–10)
 
 - [ ] Implement preset-as-note syntax: `kick /4`, `piano(C4) /4`, `piano(midi.note) *midi.velocity`
-- [ ] Implement `state` keyword — slot-level persistent variables across note firings
-- [ ] Implement `sequence` blocks — cursor persistence, step-sequencer and real-time modes
+- [ ] Implement `song` variable — snapshot of previous execution state passed to each firing
+- [ ] Implement `song.voices` — expose active voices with `.pitchBend()`, `.release()`, `.extend()`
+- [ ] Implement `song.*` user properties — writable properties that persist to next firing
+- [ ] Implement `song.cursor` / `song.elapsed` / `song.beat` for continuation patterns
 - [ ] Add `midi.*` and `transport.*` variable injection to compiler
 - [ ] Add `if/else`, `while`, arithmetic/comparison/logical expressions to parser
 - [ ] Add array literals, `.length`, `.indexOf()` to runtime
@@ -973,12 +1062,13 @@ nih-plug's `cargo xtask bundle` produces correctly structured plugin bundles:
 - [ ] Auxiliary `on cc(n)`, `on pitchBend`, `on noteOff` handlers
 - [ ] `while (midi.gate)` loops: suspend across process() calls, exit on note-off
 - [ ] Error display with source location markers in editor
-- [ ] Verify examples: default preset, arpeggiator, drum kit, harmonizer, step sequencer
-- [ ] DAW loop point detection → context reset
+- [ ] Verify examples: pitch bend, close harmony, drum loop/gap, arpeggiator, harmonizer
+- [ ] Configurable gap timeout — `song` resets to `undefined` after idle period
+- [ ] DAW loop point detection → context/song reset
 
 ### Phase 5 — Polish & Release (Weeks 11–13)
 
-- [ ] Plugin state save/restore (all slot .sw sources, parameters, state vars, sequence cursors)
+- [ ] Plugin state save/restore (all slot .sw sources, parameters, song state snapshots)
 - [ ] Preset parameter automation (expose per-slot params to DAW)
 - [ ] Combination presets ("Orchestra" auto-creates multiple slots with .sw wiring)
 - [ ] Cache management UI (per-library size, clear, offline status)
@@ -1016,7 +1106,7 @@ nih-plug's `cargo xtask bundle` produces correctly structured plugin bundles:
 | 1 | GUI framework | **egui + embedded webview** for songwalker-js component reuse. Pure-egui fallback for incompatible DAWs. |
 | 2 | Preset caching | **On-demand.** Cache library indexes + used presets. "Download for Offline" button per library for bulk caching. |
 | 3 | Preset vs Runner modes | **Unified.** No separate modes. Every slot is a `.sw` source. Preset selection auto-generates a 2-line default `.sw`. Users edit for advanced behavior. |
-| 4 | Execution model | **Reactive re-execution.** Entire `.sw` file re-runs on every MIDI note (like React rendering). `state` persists across firings. `sequence` blocks continue from saved cursor. No `on noteOn` wrapper — the file body IS the note handler. Auxiliary `on cc`/`on pitchBend` for non-note events. |
+| 4 | Execution model | **Reactive re-execution.** Entire `.sw` file re-runs on every MIDI note (like React rendering). `song` variable carries previous execution state (voices, timing, user props) — `undefined` on first firing. No `on noteOn` wrapper — the file body IS the note handler. Auxiliary `on cc`/`on pitchBend` for non-note events. |
 | 5 | Note syntax | **Preset-as-note.** Preset identifiers in note position: `kick /4` (default pitch), `piano(midi.note) *midi.velocity` (computed pitch). No `.play()` method needed. |
 | 6 | Multi-timbral | **Yes, Kontakt-style.** Multiple named `.sw` slots. Required for combination presets (orchestra, quartet, layered instruments). |
 | 7 | Licensing | **Free & open source.** GPLv3 (or similar). Donation-based (GitHub Sponsors, Ko-fi, etc.). No paywalls. |
