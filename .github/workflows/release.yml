@@ -71,13 +71,17 @@ jobs:
           restore-keys: ${{ matrix.name }}-cargo-
 
       # ── Linux (glibc 2.31 — compatible with Ubuntu 20.04+, Debian 11+) ──
-      - name: Build (Linux, glibc 2.31)
+      # cargo-zigbuild links against glibc 2.31; manual bundle because xtask
+      # would re-invoke cargo build with the system linker (glibc 2.39).
+      - name: Build & Bundle (Linux, glibc 2.31)
         if: runner.os == 'Linux'
-        run: cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.31 --lib
-
-      - name: Bundle (Linux)
-        if: runner.os == 'Linux'
-        run: cargo xtask bundle songwalker_vsti --release
+        run: |
+          cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.31 --lib
+          mkdir -p target/bundled/songwalker_vsti.vst3/Contents/x86_64-linux
+          cp target/x86_64-unknown-linux-gnu/release/libsongwalker_vsti.so \
+            target/bundled/songwalker_vsti.vst3/Contents/x86_64-linux/songwalker_vsti.so
+          cp target/x86_64-unknown-linux-gnu/release/libsongwalker_vsti.so \
+            target/bundled/songwalker_vsti.clap
 
       # ── macOS universal ──
       - name: Bundle (macOS arm64)
