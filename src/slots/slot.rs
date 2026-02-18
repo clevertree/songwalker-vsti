@@ -4,15 +4,6 @@ use super::preset_slot::PresetSlotState;
 use super::runner_slot::RunnerSlotState;
 use crate::transport::TransportState;
 
-/// The mode of operation for a slot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SlotMode {
-    /// Direct MIDI → preset playback.
-    Preset,
-    /// `.sw` track execution triggered by MIDI.
-    Runner,
-}
-
 /// Voice state for a single voice in the pre-allocated pool.
 #[derive(Clone)]
 pub struct Voice {
@@ -150,11 +141,14 @@ impl VoicePool {
 }
 
 /// A single instrument slot in the rack.
+///
+/// Each slot is a unified instrument that handles MIDI → preset playback.
+/// If source code is loaded, it can also run `.sw` tracks.
+/// This matches the web editor model where presets are loaded via
+/// `loadPreset()` in source code.
 pub struct Slot {
     /// Slot index in the rack.
     index: usize,
-    /// Current mode.
-    mode: SlotMode,
     /// Pre-allocated voice pool.
     voice_pool: VoicePool,
     /// Volume gain (linear).
@@ -169,19 +163,20 @@ pub struct Slot {
     midi_channel: i32,
     /// Host sample rate.
     sample_rate: f32,
-    /// Preset-specific state.
+    /// Preset-specific state (sampler zones, envelope, etc.).
     preset_state: PresetSlotState,
-    /// Runner-specific state.
+    /// Runner-specific state (for .sw source code execution).
     runner_state: RunnerSlotState,
+    /// Whether this slot has .sw source code loaded.
+    has_source: bool,
     /// Display name for the slot.
     pub name: String,
 }
 
 impl Slot {
-    pub fn new(index: usize, mode: SlotMode) -> Self {
+    pub fn new(index: usize) -> Self {
         Self {
             index,
-            mode,
             voice_pool: VoicePool::new(64),
             volume: 1.0,
             pan: 0.0,
@@ -191,6 +186,7 @@ impl Slot {
             sample_rate: 44100.0,
             preset_state: PresetSlotState::default(),
             runner_state: RunnerSlotState::default(),
+            has_source: false,
             name: format!("Slot {}", index + 1),
         }
     }
@@ -212,13 +208,14 @@ impl Slot {
         self.index
     }
 
-    pub fn mode(&self) -> SlotMode {
-        self.mode
+    /// Whether this slot has .sw source code loaded.
+    pub fn has_source(&self) -> bool {
+        self.has_source
     }
 
-    pub fn set_mode(&mut self, mode: SlotMode) {
-        self.reset();
-        self.mode = mode;
+    /// Set whether this slot has source code.
+    pub fn set_has_source(&mut self, has_source: bool) {
+        self.has_source = has_source;
     }
 
     pub fn volume(&self) -> f32 {
@@ -282,10 +279,14 @@ impl Slot {
     }
 
     /// Handle an incoming MIDI event.
+    ///
+    /// If the slot has source code, it routes to the runner.
+    /// Otherwise, it routes to preset playback.
     pub fn handle_midi_event(&mut self, event: &NoteEvent<()>, transport: &TransportState) {
-        match self.mode {
-            SlotMode::Preset => self.handle_preset_midi(event),
-            SlotMode::Runner => self.handle_runner_midi(event, transport),
+        if self.has_source {
+            self.handle_runner_midi(event, transport);
+        } else {
+            self.handle_preset_midi(event);
         }
     }
 
@@ -354,13 +355,10 @@ impl Slot {
         sample_rate: f32,
         transport: &TransportState,
     ) {
-        match self.mode {
-            SlotMode::Preset => {
-                self.render_preset(left, right, num_samples, sample_rate);
-            }
-            SlotMode::Runner => {
-                self.render_runner(left, right, num_samples, sample_rate, transport);
-            }
+        if self.has_source {
+            self.render_runner(left, right, num_samples, sample_rate, transport);
+        } else {
+            self.render_preset(left, right, num_samples, sample_rate);
         }
 
         self.voice_pool.cleanup_finished();
@@ -695,9 +693,9 @@ mod tests {
 
     #[test]
     fn slot_creation_defaults() {
-        let slot = Slot::new(0, SlotMode::Preset);
+        let slot = Slot::new(0);
         assert_eq!(slot.index(), 0);
-        assert_eq!(slot.mode(), SlotMode::Preset);
+        assert!(!slot.has_source());
         assert!(!slot.is_muted());
         assert!(!slot.is_solo());
         assert_eq!(slot.midi_channel(), 0);
@@ -707,18 +705,18 @@ mod tests {
     }
 
     #[test]
-    fn slot_mode_switch() {
-        let mut slot = Slot::new(0, SlotMode::Preset);
-        assert_eq!(slot.mode(), SlotMode::Preset);
-        slot.set_mode(SlotMode::Runner);
-        assert_eq!(slot.mode(), SlotMode::Runner);
+    fn slot_source_toggle() {
+        let mut slot = Slot::new(0);
+        assert!(!slot.has_source());
+        slot.set_has_source(true);
+        assert!(slot.has_source());
     }
 
     // ── MIDI handling (preset mode) ─────────────────────────────
 
     #[test]
     fn preset_note_on_off_triggers_voice() {
-        let mut slot = Slot::new(0, SlotMode::Preset);
+        let mut slot = Slot::new(0);
         slot.initialize(44100.0);
         let transport = default_transport();
 
@@ -807,7 +805,7 @@ mod tests {
 
     #[test]
     fn render_sine_fallback_produces_audio() {
-        let mut slot = Slot::new(0, SlotMode::Preset);
+        let mut slot = Slot::new(0);
         slot.initialize(44100.0);
         let transport = default_transport();
 
@@ -831,7 +829,7 @@ mod tests {
 
     #[test]
     fn render_sampler_reads_pcm_data() {
-        let mut slot = Slot::new(0, SlotMode::Preset);
+        let mut slot = Slot::new(0);
         slot.initialize(44100.0);
         let transport = default_transport();
 
@@ -874,7 +872,7 @@ mod tests {
 
     #[test]
     fn render_sampler_stereo() {
-        let mut slot = Slot::new(0, SlotMode::Preset);
+        let mut slot = Slot::new(0);
         slot.initialize(44100.0);
         let transport = default_transport();
 
@@ -918,7 +916,7 @@ mod tests {
 
     #[test]
     fn sampler_voice_ends_past_sample_length() {
-        let mut slot = Slot::new(0, SlotMode::Preset);
+        let mut slot = Slot::new(0);
         slot.initialize(44100.0);
         let transport = default_transport();
 
@@ -983,7 +981,7 @@ mod tests {
 
     #[test]
     fn slot_mute_solo_setters() {
-        let mut slot = Slot::new(0, SlotMode::Preset);
+        let mut slot = Slot::new(0);
         slot.set_muted(true);
         assert!(slot.is_muted());
         slot.set_solo(true);

@@ -13,10 +13,14 @@ pub struct BrowserState {
 
 /// Draw the preset browser panel.
 pub fn draw(ui: &mut egui::Ui, state: &mut EditorState) {
+    ui.set_clip_rect(ui.max_rect());
     ui.vertical(|ui| {
+        ui.set_max_width(ui.available_width());
+        ui.spacing_mut().item_spacing = egui::vec2(6.0, 3.0);
+
         // --- Search bar ---
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("🔍").color(colors::SUBTEXT0));
+            ui.label(egui::RichText::new("\u{1F50D}").color(colors::SUBTEXT0).size(12.0));
             let response = ui.text_edit_singleline(&mut state.browser_state.search_text);
             if response.changed() {
                 if let Ok(mut pm) = state.preset_manager.lock() {
@@ -28,7 +32,11 @@ pub fn draw(ui: &mut egui::Ui, state: &mut EditorState) {
         ui.separator();
 
         // --- Libraries section ---
-        ui.label(egui::RichText::new("Libraries").color(colors::SUBTEXT0).small());
+        ui.add_space(2.0);
+        ui.label(egui::RichText::new("Libraries")
+            .color(colors::SUBTEXT0)
+            .size(10.0)
+            .family(egui::FontFamily::Monospace));
 
         let libraries: Vec<(String, usize, bool)> = if let Ok(pm) = state.preset_manager.lock() {
             pm.libraries
@@ -56,7 +64,7 @@ pub fn draw(ui: &mut egui::Ui, state: &mut EditorState) {
                         } else {
                             colors::OVERLAY0
                         })
-                        .small(),
+                        .size(12.0),
                 );
             });
         }
@@ -67,7 +75,7 @@ pub fn draw(ui: &mut egui::Ui, state: &mut EditorState) {
             .button(
                 egui::RichText::new("⬇ Download for Offline")
                     .color(colors::TEAL)
-                    .small(),
+                    .size(12.0),
             )
             .clicked()
         {
@@ -77,7 +85,11 @@ pub fn draw(ui: &mut egui::Ui, state: &mut EditorState) {
         ui.separator();
 
         // --- Categories section ---
-        ui.label(egui::RichText::new("Categories").color(colors::SUBTEXT0).small());
+        ui.add_space(2.0);
+        ui.label(egui::RichText::new("Categories")
+            .color(colors::SUBTEXT0)
+            .size(10.0)
+            .family(egui::FontFamily::Monospace));
 
         let categories: Vec<String> = if let Ok(pm) = state.preset_manager.lock() {
             pm.available_categories()
@@ -129,7 +141,11 @@ pub fn draw(ui: &mut egui::Ui, state: &mut EditorState) {
         ui.separator();
 
         // --- Instrument list ---
-        ui.label(egui::RichText::new("Instruments").color(colors::SUBTEXT0).small());
+        ui.add_space(2.0);
+        ui.label(egui::RichText::new("Instruments")
+            .color(colors::SUBTEXT0)
+            .size(10.0)
+            .family(egui::FontFamily::Monospace));
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -155,7 +171,7 @@ pub fn draw(ui: &mut egui::Ui, state: &mut EditorState) {
                     ui.label(
                         egui::RichText::new("No presets loaded. Check internet connection.")
                             .color(colors::OVERLAY0)
-                            .small()
+                            .size(11.0)
                             .italics(),
                     );
                 }
@@ -164,9 +180,15 @@ pub fn draw(ui: &mut egui::Ui, state: &mut EditorState) {
                     let is_selected = state.browser_state.selected_preset.as_ref()
                         == Some(&(lib.clone(), path.clone()));
 
+                    let display_name = if name.len() > 40 {
+                        format!("{}…", &name[..39])
+                    } else {
+                        name.clone()
+                    };
+
                     let response = ui.selectable_label(
                         is_selected,
-                        egui::RichText::new(name).color(if is_selected {
+                        egui::RichText::new(&display_name).color(if is_selected {
                             colors::BLUE
                         } else {
                             colors::TEXT

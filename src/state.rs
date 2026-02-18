@@ -46,23 +46,18 @@ impl PluginState {
     }
 }
 
-/// Mode a slot operates in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SlotMode {
-    /// Plays a loaded preset instrument (sampler-based).
-    Preset,
-    /// Runs a .sw track triggered by MIDI.
-    Runner,
-}
-
 /// Configuration for a single slot, persisted in the project.
+///
+/// Each slot is a unified instrument that can load a preset and/or
+/// contain `.sw` source code (like the web editor). There is no
+/// separate "preset" vs "runner" mode — presets are loaded via
+/// `loadPreset()` calls in the source code, or assigned directly
+/// through the browser.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlotConfig {
     /// Display name (typically the preset or file name).
     pub name: String,
-    /// Operating mode.
-    pub mode: SlotMode,
-    /// Preset identifier (library_key / instrument_key) if in preset mode.
+    /// Preset identifier (library_key / instrument_key), if any.
     pub preset_id: Option<String>,
     /// MIDI channel this slot responds to (0 = omni, 1-16 = specific).
     pub midi_channel: i32,
@@ -74,11 +69,11 @@ pub struct SlotConfig {
     pub muted: bool,
     /// Solo flag.
     pub solo: bool,
-    /// Root MIDI note for runner mode triggering (default 60 = C4).
+    /// Root MIDI note for triggering (default 60 = C4).
     pub root_note: u8,
-    /// Song Walker source code (runner mode).
+    /// Song Walker source code (optional inline editor).
     pub source_code: String,
-    /// Last compilation error (runner mode), not persisted.
+    /// Last compilation error, not persisted.
     #[serde(skip)]
     pub compile_error: Option<String>,
 }
@@ -87,7 +82,6 @@ impl Default for SlotConfig {
     fn default() -> Self {
         Self {
             name: "New Slot".to_string(),
-            mode: SlotMode::Preset,
             preset_id: None,
             midi_channel: 0,
             volume: 0.8,
@@ -102,21 +96,19 @@ impl Default for SlotConfig {
 }
 
 impl SlotConfig {
-    /// Create a new preset-mode slot.
+    /// Create a new slot with a preset assigned.
     pub fn new_preset(name: &str, preset_id: &str) -> Self {
         Self {
             name: name.to_string(),
-            mode: SlotMode::Preset,
             preset_id: Some(preset_id.to_string()),
             ..Self::default()
         }
     }
 
-    /// Create a new runner-mode slot.
-    pub fn new_runner(name: &str, source: &str) -> Self {
+    /// Create a new slot with source code.
+    pub fn new_with_source(name: &str, source: &str) -> Self {
         Self {
             name: name.to_string(),
-            mode: SlotMode::Runner,
             source_code: source.to_string(),
             ..Self::default()
         }

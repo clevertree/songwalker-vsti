@@ -1,13 +1,14 @@
 //! Multi-timbral slot system (Kontakt-style rack).
 //!
-//! Each slot is independently a Preset slot or a Runner slot.
-//! Slots can be added, removed, reordered, solo'd, and muted.
+//! Each slot is a unified instrument that handles MIDI → preset playback
+//! and optionally runs `.sw` source code. This matches the web editor
+//! model where presets are loaded via `loadPreset()` in source code.
 
 pub mod preset_slot;
 pub mod runner_slot;
 pub mod slot;
 
-pub use slot::{Slot, SlotMode};
+pub use slot::Slot;
 
 /// Maximum number of simultaneous slots.
 pub const MAX_SLOTS: usize = 16;
@@ -20,9 +21,9 @@ pub struct SlotManager {
 
 impl SlotManager {
     pub fn new() -> Self {
-        // Start with one empty preset slot
+        // Start with one empty slot
         Self {
-            slots: vec![Slot::new(0, SlotMode::Preset)],
+            slots: vec![Slot::new(0)],
             sample_rate: 44100.0,
         }
     }
@@ -53,12 +54,12 @@ impl SlotManager {
     }
 
     /// Add a new slot. Returns the slot index, or None if max reached.
-    pub fn add_slot(&mut self, mode: SlotMode) -> Option<usize> {
+    pub fn add_slot(&mut self) -> Option<usize> {
         if self.slots.len() >= MAX_SLOTS {
             return None;
         }
         let idx = self.slots.len();
-        let mut slot = Slot::new(idx, mode);
+        let mut slot = Slot::new(idx);
         slot.initialize(self.sample_rate);
         self.slots.push(slot);
         Some(idx)

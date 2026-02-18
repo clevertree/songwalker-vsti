@@ -20,8 +20,8 @@ use crate::preset::manager::PresetManager;
 use crate::state::PluginState;
 
 /// Default editor window size.
-const EDITOR_WIDTH: u32 = 1000;
-const EDITOR_HEIGHT: u32 = 700;
+const EDITOR_WIDTH: u32 = 800;
+const EDITOR_HEIGHT: u32 = 600;
 
 /// Catppuccin Mocha color palette (matches the web editor).
 pub mod colors {
@@ -91,35 +91,51 @@ pub struct EditorState {
     pub slot_rack_state: slot_rack::SlotRackState,
 }
 
-/// Apply the Catppuccin Mocha theme to egui.
+/// Apply the Catppuccin Mocha theme to egui, matching the web editor CSS.
 fn apply_theme(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
 
-    // Dark background
+    // Dark background — matches --bg / --surface
     style.visuals.dark_mode = true;
     style.visuals.panel_fill = colors::BASE;
     style.visuals.window_fill = colors::MANTLE;
 
-    // Widget colors
+    // Widget colors — buttons use --surface bg + --border border (4px radius)
     style.visuals.widgets.noninteractive.bg_fill = colors::SURFACE0;
     style.visuals.widgets.noninteractive.fg_stroke =
         egui::Stroke::new(1.0, colors::TEXT);
-    style.visuals.widgets.inactive.bg_fill = colors::SURFACE0;
+    style.visuals.widgets.noninteractive.weak_bg_fill = colors::MANTLE;
+    style.visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(4);
+    style.visuals.widgets.inactive.bg_fill = colors::MANTLE;
+    style.visuals.widgets.inactive.weak_bg_fill = colors::MANTLE;
+    style.visuals.widgets.inactive.bg_stroke =
+        egui::Stroke::new(1.0, colors::SURFACE0);
     style.visuals.widgets.inactive.fg_stroke =
         egui::Stroke::new(1.0, colors::SUBTEXT0);
-    style.visuals.widgets.hovered.bg_fill = colors::SURFACE1;
+    style.visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(4);
+    style.visuals.widgets.hovered.bg_fill = colors::SURFACE0;
+    style.visuals.widgets.hovered.weak_bg_fill = colors::SURFACE0;
     style.visuals.widgets.hovered.fg_stroke =
         egui::Stroke::new(1.0, colors::TEXT);
-    style.visuals.widgets.active.bg_fill = colors::SURFACE2;
+    style.visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(4);
+    style.visuals.widgets.active.bg_fill = colors::SURFACE1;
+    style.visuals.widgets.active.weak_bg_fill = colors::SURFACE1;
     style.visuals.widgets.active.fg_stroke =
         egui::Stroke::new(1.0, colors::TEXT);
+    style.visuals.widgets.active.corner_radius = egui::CornerRadius::same(4);
 
     // Selection
     style.visuals.selection.bg_fill = colors::BLUE.linear_multiply(0.3);
     style.visuals.selection.stroke = egui::Stroke::new(1.0, colors::BLUE);
 
-    // Window
-    style.visuals.window_stroke = egui::Stroke::new(1.0, colors::SURFACE1);
+    // Window / panel borders — matching --border (#313244 = SURFACE0)
+    style.visuals.window_stroke = egui::Stroke::new(1.0, colors::SURFACE0);
+    style.visuals.window_corner_radius = egui::CornerRadius::same(4);
+
+    // Spacing — tighter to match web CSS
+    style.spacing.item_spacing = egui::vec2(6.0, 4.0);
+    style.spacing.button_padding = egui::vec2(6.0, 3.0);
+    style.spacing.window_margin = egui::Margin::same(8);
 
     ctx.set_style(style);
 }
@@ -131,78 +147,126 @@ fn draw_editor(
     state: &mut EditorState,
     params: &SongWalkerParams,
 ) {
-    // --- Header bar ---
-    egui::TopBottomPanel::top("header").show(ctx, |ui| {
-        ui.horizontal(|ui| {
-            ui.heading(
-                egui::RichText::new("SongWalker")
-                    .color(colors::BLUE)
-                    .strong(),
+    // --- Header bar --- (web: padding 1rem 2rem, border-bottom: --border)
+    egui::TopBottomPanel::top("header")
+        .frame(
+            egui::Frame::NONE
+                .fill(colors::BASE)
+                .inner_margin(egui::Margin::symmetric(16, 8))
+                .stroke(egui::Stroke::NONE),
+        )
+        .show(ctx, |ui| {
+            ui.set_clip_rect(ui.max_rect());
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("SongWalker")
+                        .color(colors::BLUE)
+                        .strong()
+                        .size(16.0),
+                );
+                ui.label(
+                    egui::RichText::new("VSTi")
+                        .color(colors::SUBTEXT0)
+                        .size(12.0),
+                );
+                ui.add_space(8.0);
+
+                if ui
+                    .selectable_label(state.current_tab == EditorTab::SlotRack, "Slot Rack")
+                    .clicked()
+                {
+                    state.current_tab = EditorTab::SlotRack;
+                }
+                if ui
+                    .selectable_label(state.current_tab == EditorTab::Settings, "⚙ Settings")
+                    .clicked()
+                {
+                    state.current_tab = EditorTab::Settings;
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.hyperlink_to(
+                        egui::RichText::new("♥ Donate").color(colors::PINK).size(12.0),
+                        "https://github.com/sponsors/clevertree",
+                    );
+                });
+            });
+            // Bottom border matching --border
+            let rect = ui.max_rect();
+            ui.painter().line_segment(
+                [
+                    egui::pos2(rect.left(), rect.bottom()),
+                    egui::pos2(rect.right(), rect.bottom()),
+                ],
+                egui::Stroke::new(1.0, colors::SURFACE0),
             );
-            ui.separator();
+        });
 
-            if ui
-                .selectable_label(state.current_tab == EditorTab::SlotRack, "Slot Rack")
-                .clicked()
-            {
-                state.current_tab = EditorTab::SlotRack;
-            }
-            if ui
-                .selectable_label(state.current_tab == EditorTab::Settings, "⚙ Settings")
-                .clicked()
-            {
-                state.current_tab = EditorTab::Settings;
-            }
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.hyperlink_to(
-                    egui::RichText::new("♥ Donate").color(colors::PINK),
-                    "https://github.com/sponsors/clevertree",
+    // --- Status bar --- (web: padding 0.2rem 0.75rem, bg --surface, border-top --border)
+    egui::TopBottomPanel::bottom("status_bar")
+        .frame(
+            egui::Frame::NONE
+                .fill(colors::MANTLE)
+                .inner_margin(egui::Margin::symmetric(12, 3)),
+        )
+        .show(ctx, |ui| {
+            // Top border
+            let rect = ui.max_rect();
+            ui.painter().line_segment(
+                [
+                    egui::pos2(rect.left(), rect.top()),
+                    egui::pos2(rect.right(), rect.top()),
+                ],
+                egui::Stroke::new(1.0, colors::SURFACE0),
+            );
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                ui.label(
+                    egui::RichText::new("Ready")
+                        .color(colors::GREEN)
+                        .size(11.0)
+                        .family(egui::FontFamily::Monospace),
+                );
+                ui.label(
+                    egui::RichText::new("Voices: 0/256")
+                        .color(colors::SUBTEXT0)
+                        .size(11.0)
+                        .family(egui::FontFamily::Monospace),
+                );
+                ui.label(
+                    egui::RichText::new("CPU: 0.0%")
+                        .color(colors::SUBTEXT0)
+                        .size(11.0)
+                        .family(egui::FontFamily::Monospace),
+                );
+                ui.label(
+                    egui::RichText::new("Cache: 0 MB")
+                        .color(colors::SUBTEXT0)
+                        .size(11.0)
+                        .family(egui::FontFamily::Monospace),
                 );
             });
         });
-    });
 
-    // --- Status bar ---
-    egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("Ready")
-                    .color(colors::GREEN)
-                    .small(),
-            );
-            ui.separator();
-            ui.label(
-                egui::RichText::new("Voices: 0/256")
-                    .color(colors::SUBTEXT0)
-                    .small(),
-            );
-            ui.separator();
-            ui.label(
-                egui::RichText::new("CPU: 0.0%")
-                    .color(colors::SUBTEXT0)
-                    .small(),
-            );
-            ui.separator();
-            ui.label(
-                egui::RichText::new("Cache: 0 MB")
-                    .color(colors::SUBTEXT0)
-                    .small(),
-            );
-        });
-    });
-
-    // --- Left panel: Preset browser ---
+    // --- Left panel: Preset browser --- (web: bg --surface, border-left --border)
     egui::SidePanel::left("browser_panel")
-        .min_width(220.0)
-        .max_width(300.0)
+        .default_width(200.0)
+        .min_width(160.0)
+        .max_width(260.0)
         .resizable(true)
+        .frame(
+            egui::Frame::NONE
+                .fill(colors::MANTLE)
+                .inner_margin(egui::Margin::symmetric(10, 8)),
+        )
         .show(ctx, |ui| {
+            ui.set_clip_rect(ui.max_rect());
             browser::draw(ui, state);
         });
 
     // --- Central panel: Slot rack or settings ---
     egui::CentralPanel::default().show(ctx, |ui| {
+        ui.set_clip_rect(ui.max_rect());
         match state.current_tab {
             EditorTab::SlotRack => {
                 slot_rack::draw(ui, state);
@@ -212,6 +276,14 @@ fn draw_editor(
             }
         }
     });
+
+    // Enable window dragging from any non-interactive area (empty panel backgrounds, etc.)
+    // Works in standalone mode; silently ignored when hosted in a DAW that manages the window.
+    if ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
+        && !ctx.is_using_pointer()
+    {
+        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
 }
 
 /// Draw the settings panel.

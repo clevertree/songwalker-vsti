@@ -33,8 +33,8 @@ The embedded UI reuses the **songwalker-js** editor and preset browser (same Mon
 │             │           SongWalker VSTi             │──► Audio Out
 │  Transport ►│                                       │        │
 │             │  ┌─────────────┐   ┌───────────────┐  │        │
-│             │  │  MIDI Router │   │  UI (egui +   │  │        │
-│             │  │  (by channel)│   │  webview)     │  │        │
+│             │  │ MIDI Router │   │  UI (egui +   │  │        │
+│             │  │ (by channel)│   │  webview)     │  │        │
 │             │  └──────┬──────┘   │  Slot Rack    │  │        │
 │             │         │          │  .sw Editor   │  │        │
 │             │  ┌──────▼──────┐   │  Preset       │  │        │
@@ -50,8 +50,8 @@ The embedded UI reuses the **songwalker-js** editor and preset browser (same Mon
 │             │  │ core (DSP)  │   └───────────────┘  │        │
 │             │  └─────────────┘                      │        │
 │             │                                       │        │
-│             │  Every slot = .sw source + compiled    │        │
-│             │  program + state vars + sequence cursors │        │
+│             │  Every slot = .sw source + compiled   │        │
+│             │  program + state vars + sequence      │        │
 │             └───────────────────────────────────────┘        │
 └──────────────────────────────────────────────────────────────┘
 ```
