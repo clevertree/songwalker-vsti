@@ -7,17 +7,32 @@
 
 pub mod browser;
 pub mod code_editor;
+pub mod piano;
 pub mod slot_rack;
 pub mod visualizer;
 
 use std::sync::{Arc, Mutex};
 
+use crossbeam_channel::Sender;
 use nih_plug::prelude::*;
 use nih_plug_egui::{create_egui_editor, egui, EguiState};
 
 use crate::params::SongWalkerParams;
 use crate::preset::manager::PresetManager;
 use crate::state::PluginState;
+
+/// Events sent from the editor UI to the audio thread.
+#[derive(Debug, Clone)]
+pub enum EditorEvent {
+    /// Trigger a note-on on a specific slot.
+    NoteOn { slot_index: usize, note: u8, velocity: f32 },
+    /// Release a note on a specific slot.
+    NoteOff { slot_index: usize, note: u8 },
+    /// Play a preset preview (C4 E4 G4 C5 arpeggio) on a specific slot.
+    PreviewPreset { slot_index: usize },
+    /// Stop all preview playback.
+    StopPreview,
+}
 
 /// The application icon (PNG), embedded at compile time.
 const ICON_PNG: &[u8] = include_bytes!("../../media/icon.png");
@@ -71,6 +86,7 @@ pub fn create(
     plugin_state: Arc<Mutex<PluginState>>,
     params: Arc<SongWalkerParams>,
     editor_state: Arc<EguiState>,
+    event_tx: Sender<EditorEvent>,
 ) -> Option<Box<dyn Editor>> {
     let egui_state_for_resize = editor_state.clone();
 
@@ -83,6 +99,8 @@ pub fn create(
             current_tab: EditorTab::SlotRack,
             browser_state: browser::BrowserState::default(),
             slot_rack_state: slot_rack::SlotRackState::default(),
+            piano_state: piano::PianoState::default(),
+            event_tx,
             zoom_level: 1.0,
             resize_drag_start: None,
         },
@@ -126,6 +144,9 @@ pub struct EditorState {
     pub current_tab: EditorTab,
     pub browser_state: browser::BrowserState,
     pub slot_rack_state: slot_rack::SlotRackState,
+    pub piano_state: piano::PianoState,
+    /// Channel for sending events (note on/off, preview) to the audio thread.
+    pub event_tx: Sender<EditorEvent>,
     /// UI zoom level (1.0 = 100%, range 0.5–2.0).
     pub zoom_level: f32,
     /// Tracks the drag anchor for window resize: (start_pointer_pos, start_window_size).
@@ -282,6 +303,18 @@ fn draw_editor(
                     state.current_tab = EditorTab::Settings;
                 }
 
+                // Piano keyboard toggle
+                let piano_color = if state.piano_state.visible { colors::BLUE } else { colors::SUBTEXT0 };
+                if ui
+                    .selectable_label(
+                        state.piano_state.visible,
+                        egui::RichText::new("Piano").color(piano_color).size(zs(14.0, z)),
+                    )
+                    .clicked()
+                {
+                    state.piano_state.visible = !state.piano_state.visible;
+                }
+
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.hyperlink_to(
                         egui::RichText::new("♥ Donate").color(colors::PINK).size(zs(12.0, z)),
@@ -368,6 +401,21 @@ fn draw_editor(
                 );
             });
         });
+
+    // --- Piano keyboard (togglable bottom panel) ---
+    if state.piano_state.visible {
+        egui::TopBottomPanel::bottom("piano")
+            .resizable(false)
+            .frame(
+                egui::Frame::NONE
+                    .fill(colors::CRUST)
+                    .inner_margin(egui::Margin::symmetric(zs(8.0, z) as i8, zs(4.0, z) as i8))
+                    .stroke(egui::Stroke::new(1.0, colors::SURFACE0)),
+            )
+            .show(ctx, |ui| {
+                piano::draw(ui, state, z);
+            });
+    }
 
     // --- Left panel: Preset browser ---
     egui::SidePanel::left("browser_panel")

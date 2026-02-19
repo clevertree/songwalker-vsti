@@ -2,6 +2,7 @@ use nih_plug_egui::egui;
 
 use super::colors;
 use super::zs;
+use super::EditorEvent;
 use super::EditorState;
 use crate::preset::manager::{LibraryStatus, PresetManager};
 use crate::state::SlotConfig;
@@ -277,6 +278,18 @@ fn draw_library_tree(ui: &mut egui::Ui, state: &mut EditorState, z: f32) {
                 ui.horizontal(|ui| {
                     ui.add_space(zs(24.0, z));
 
+                    // Play button (painted triangle)
+                    if play_triangle_button(ui, z).clicked() {
+                        // Add to slot first (ensures a slot has this preset), then preview
+                        add_preset_to_slot(state, name, preset_name, preset_path);
+                        let slot_idx = state.slot_rack_state.selected_slot;
+                        let _ = state.event_tx.try_send(EditorEvent::NoteOn {
+                            slot_index: slot_idx,
+                            note: 60, // C4
+                            velocity: 0.8,
+                        });
+                    }
+
                     // "+" add-to-slot button
                     if ui
                         .small_button(egui::RichText::new("+").color(colors::GREEN).size(zs(10.0, z)))
@@ -360,6 +373,17 @@ fn draw_search_results(ui: &mut egui::Ui, state: &mut EditorState, z: f32) {
         };
 
         ui.horizontal(|ui| {
+            // Play button (painted triangle)
+            if play_triangle_button(ui, z).clicked() {
+                add_preset_to_slot(state, lib_name, preset_name, preset_path);
+                let slot_idx = state.slot_rack_state.selected_slot;
+                let _ = state.event_tx.try_send(EditorEvent::NoteOn {
+                    slot_index: slot_idx,
+                    note: 60,
+                    velocity: 0.8,
+                });
+            }
+
             // "+" add-to-slot button
             if ui
                 .small_button(egui::RichText::new("+").color(colors::GREEN).size(zs(10.0, z)))
@@ -419,4 +443,38 @@ fn add_preset_to_slot(
             state.slot_rack_state.selected_slot = idx;
         }
     }
+}
+
+/// Draw a small play triangle button (▶) using the egui painter.
+/// Returns the Response so the caller can check `.clicked()`.
+fn play_triangle_button(ui: &mut egui::Ui, z: f32) -> egui::Response {
+    let size = zs(14.0, z);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(size, size),
+        egui::Sense::click(),
+    );
+
+    if ui.is_rect_visible(rect) {
+        let color = if response.hovered() {
+            colors::GREEN
+        } else {
+            colors::TEAL
+        };
+
+        // Draw a right-pointing triangle centered in the rect
+        let center = rect.center();
+        let half = size * 0.4;
+        let points = vec![
+            egui::pos2(center.x - half * 0.6, center.y - half),
+            egui::pos2(center.x + half * 0.8, center.y),
+            egui::pos2(center.x - half * 0.6, center.y + half),
+        ];
+        ui.painter().add(egui::Shape::convex_polygon(
+            points,
+            color,
+            egui::Stroke::NONE,
+        ));
+    }
+
+    response.on_hover_text("Preview preset (C4)")
 }
