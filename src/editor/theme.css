@@ -1,0 +1,452 @@
+/* SongWalker VSTi — Catppuccin Mocha dark theme for VIZIA */
+
+/* ── Color Variables ── */
+:root {
+    /* Catppuccin Mocha palette */
+    --base: #1e1e2e;
+    --mantle: #181825;
+    --crust: #11111b;
+    --surface0: #313244;
+    --surface1: #45475a;
+    --surface2: #585b70;
+    --overlay0: #6c7086;
+    --text: #cdd6f4;
+    --subtext0: #a6adc8;
+    --subtext1: #bac2de;
+    --blue: #89b4fa;
+    --green: #a6e3a1;
+    --peach: #fab387;
+    --red: #f38ba8;
+    --mauve: #cba6f7;
+    --yellow: #f9e2af;
+    --teal: #94e2d5;
+    --lavender: #b4befe;
+    --pink: #f5c2e7;
+
+    background-color: var(--base);
+    color: var(--text);
+    font-size: 13;
+}
+
+/* ── Header Bar ── */
+#header {
+    height: auto;
+    background-color: var(--base);
+    border-color: var(--surface0);
+    border-width: 0px 0px 1px 0px;
+    child-space: 0px;
+    col-between: 6px;
+    layout-type: row;
+}
+
+#header-inner {
+    height: auto;
+    child-left: 8px;
+    child-right: 8px;
+    child-top: 6px;
+    child-bottom: 6px;
+    col-between: 8px;
+    layout-type: row;
+}
+
+#header .title {
+    color: var(--blue);
+    font-size: 16;
+    font-weight: bold;
+}
+
+#header .subtitle {
+    color: var(--subtext0);
+    font-size: 12;
+}
+
+.tab-button {
+    background-color: transparent;
+    color: var(--subtext0);
+    border-radius: 4px;
+    child-left: 6px;
+    child-right: 6px;
+    child-top: 3px;
+    child-bottom: 3px;
+    font-size: 13;
+    cursor: hand;
+    transition: background-color 0.1s;
+}
+
+.tab-button:hover {
+    background-color: var(--surface0);
+    color: var(--text);
+}
+
+.tab-button:checked {
+    background-color: var(--surface1);
+    color: var(--text);
+}
+
+.header-right {
+    left: 1s;
+    layout-type: row;
+    col-between: 8px;
+    child-top: 1s;
+    child-bottom: 1s;
+}
+
+.donate-link {
+    color: var(--pink);
+    font-size: 12;
+    cursor: hand;
+}
+
+/* ── Status Bar ── */
+#status-bar {
+    height: auto;
+    background-color: var(--mantle);
+    border-color: var(--surface0);
+    border-width: 1px 0px 0px 0px;
+    child-left: 12px;
+    child-right: 12px;
+    child-top: 3px;
+    child-bottom: 3px;
+    col-between: 12px;
+    layout-type: row;
+}
+
+.status-text {
+    font-size: 11;
+    color: var(--subtext0);
+}
+
+.status-text.ready {
+    color: var(--green);
+}
+
+/* ── Browser Panel ── */
+#browser-panel {
+    width: 220px;
+    min-width: 160px;
+    max-width: 300px;
+    background-color: var(--mantle);
+    border-color: var(--surface0);
+    border-width: 0px 1px 0px 0px;
+    child-left: 10px;
+    child-right: 10px;
+    child-top: 8px;
+    child-bottom: 8px;
+    row-between: 4px;
+}
+
+#browser-panel .panel-title {
+    color: var(--text);
+    font-size: 14;
+    font-weight: bold;
+}
+
+.search-box {
+    height: auto;
+    background-color: var(--surface0);
+    border-radius: 4px;
+    color: var(--text);
+    caret-color: var(--blue);
+    selection-color: #89b4fa44;
+    font-size: 13;
+    child-left: 6px;
+    child-right: 6px;
+    child-top: 4px;
+    child-bottom: 4px;
+}
+
+.search-box:focus {
+    border-color: var(--blue);
+    border-width: 1px;
+}
+
+/* Category chips */
+.category-row {
+    layout-type: row;
+    col-between: 4px;
+    height: auto;
+}
+
+.category-chip {
+    background-color: transparent;
+    border-radius: 4px;
+    font-size: 11;
+    child-left: 4px;
+    child-right: 4px;
+    child-top: 2px;
+    child-bottom: 2px;
+    color: var(--subtext0);
+    cursor: hand;
+}
+
+.category-chip:hover {
+    background-color: var(--surface0);
+}
+
+.category-chip:checked {
+    background-color: var(--surface0);
+}
+
+.category-chip.cat-all:checked { color: var(--blue); }
+.category-chip.cat-sampler:checked { color: var(--green); }
+.category-chip.cat-synth:checked { color: var(--blue); }
+.category-chip.cat-composite:checked { color: var(--mauve); }
+.category-chip.cat-effect:checked { color: var(--peach); }
+
+/* Library tree */
+.library-row {
+    layout-type: row;
+    col-between: 4px;
+    height: auto;
+    child-top: 2px;
+    child-bottom: 2px;
+    cursor: hand;
+}
+
+.library-row:hover {
+    background-color: var(--surface0);
+    border-radius: 4px;
+}
+
+.chevron {
+    color: var(--subtext0);
+    font-size: 12;
+    width: 12px;
+}
+
+.library-name {
+    color: var(--text);
+    font-size: 12;
+}
+
+.library-count {
+    color: var(--overlay0);
+    font-size: 11;
+}
+
+/* Preset rows */
+.preset-row {
+    layout-type: row;
+    col-between: 4px;
+    height: auto;
+    left: 24px;
+    child-top: 1px;
+    child-bottom: 1px;
+    cursor: hand;
+    border-radius: 4px;
+}
+
+.preset-row:hover {
+    background-color: var(--surface0);
+}
+
+.preset-row:checked {
+    background-color: #89b4fa22;
+}
+
+.add-btn {
+    color: var(--green);
+    font-size: 10;
+    background-color: transparent;
+    border-radius: 2px;
+    width: 16px;
+    height: 16px;
+    child-space: 0px;
+    cursor: hand;
+}
+
+.add-btn:hover {
+    background-color: var(--surface1);
+}
+
+.preset-dot {
+    font-size: 8;
+    width: 10px;
+    child-top: 1s;
+    child-bottom: 1s;
+}
+
+.preset-name {
+    color: var(--text);
+    font-size: 11;
+}
+
+.preset-name.selected {
+    color: var(--blue);
+}
+
+.empty-message {
+    color: var(--overlay0);
+    font-size: 11;
+    font-style: italic;
+}
+
+/* ── Slot Rack ── */
+#slot-rack {
+    child-left: 10px;
+    child-right: 10px;
+    child-top: 8px;
+    child-bottom: 8px;
+    row-between: 4px;
+}
+
+#slot-rack .panel-title {
+    color: var(--text);
+    font-size: 14;
+    font-weight: bold;
+}
+
+.add-slot-btn {
+    left: 1s;
+    color: var(--green);
+    font-size: 12;
+    background-color: transparent;
+    border-radius: 4px;
+    child-left: 6px;
+    child-right: 6px;
+    child-top: 3px;
+    child-bottom: 3px;
+    cursor: hand;
+}
+
+.add-slot-btn:hover {
+    background-color: var(--surface0);
+}
+
+.slot-card {
+    background-color: var(--crust);
+    border-color: var(--surface0);
+    border-width: 1px;
+    border-radius: 4px;
+    child-left: 10px;
+    child-right: 10px;
+    child-top: 6px;
+    child-bottom: 6px;
+    row-between: 4px;
+    cursor: hand;
+}
+
+.slot-card:checked {
+    background-color: var(--mantle);
+    border-color: var(--blue);
+}
+
+.slot-header {
+    layout-type: row;
+    col-between: 6px;
+    height: auto;
+}
+
+.slot-number {
+    color: var(--overlay0);
+    font-size: 12;
+    font-weight: bold;
+}
+
+.slot-name {
+    color: var(--text);
+    font-size: 13;
+    font-weight: bold;
+}
+
+.slot-channel {
+    color: var(--subtext0);
+    font-size: 10;
+}
+
+.slot-buttons {
+    left: 1s;
+    layout-type: row;
+    col-between: 4px;
+}
+
+.slot-btn {
+    font-size: 11;
+    background-color: transparent;
+    border-radius: 2px;
+    width: 20px;
+    height: 20px;
+    child-space: 0px;
+    cursor: hand;
+    color: var(--overlay0);
+}
+
+.slot-btn:hover {
+    background-color: var(--surface0);
+}
+
+.slot-btn.solo:checked {
+    color: var(--yellow);
+}
+
+.slot-btn.mute:checked {
+    color: var(--red);
+}
+
+.slot-btn.remove {
+    color: var(--red);
+}
+
+.slot-controls {
+    layout-type: row;
+    col-between: 8px;
+    height: auto;
+}
+
+.slot-controls label {
+    color: var(--subtext0);
+    font-size: 11;
+}
+
+.code-editor {
+    background-color: var(--crust);
+    color: var(--text);
+    border-color: var(--surface0);
+    border-width: 1px;
+    border-radius: 4px;
+    font-size: 13;
+    child-left: 6px;
+    child-right: 6px;
+    child-top: 4px;
+    child-bottom: 4px;
+    caret-color: var(--blue);
+    selection-color: #89b4fa33;
+    min-height: 120px;
+}
+
+/* ── Settings Panel ── */
+#settings-panel {
+    child-left: 16px;
+    child-right: 16px;
+    child-top: 12px;
+    child-bottom: 12px;
+    row-between: 8px;
+}
+
+#settings-panel .heading {
+    color: var(--text);
+    font-size: 18;
+    font-weight: bold;
+}
+
+#settings-panel label {
+    color: var(--subtext0);
+    font-size: 13;
+}
+
+.settings-row {
+    layout-type: row;
+    col-between: 8px;
+    height: auto;
+}
+
+/* ── Resize Handle ── */
+resize-handle {
+    position-type: self-directed;
+    top: 1s;
+    left: 1s;
+    width: 16px;
+    height: 16px;
+    cursor: nwse-resize;
+    z-index: 100;
+}

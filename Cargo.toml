@@ -22,6 +22,8 @@ songwalker_core = { path = "../songwalker-core", default-features = false }
 # Plugin framework
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", features = ["assert_process_allocs", "standalone"] }
 nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+egui = "0.31"
+egui_extras = "0.31"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -40,14 +42,19 @@ base64 = "0.22"
 directories = "6"
 sha2 = "0.10"
 
-# GUI
-egui = "0.31"
-egui_extras = "0.31"
+# Icon loading (PNG decode for X11 window icon)
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 # Utilities
 crossbeam-channel = "0.5"
 parking_lot = "0.12"
 log = "0.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", default-features = false, features = ["allow-unsafe-code"] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
 
 [profile.release]
 lto = "thin"
@@ -58,3 +65,7 @@ opt-level = 3
 inherits = "release"
 lto = "fat"
 codegen-units = 1
+
+[patch.'https://github.com/robbert-vdh/nih-plug.git']
+nih_plug = { path = "../nih-plug" }
+nih_plug_egui = { path = "../nih-plug/nih_plug_egui" }

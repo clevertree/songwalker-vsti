@@ -1,6 +1,7 @@
 use nih_plug_egui::egui;
 
 use super::colors;
+use super::zs;
 use super::EditorState;
 use crate::state::SlotConfig;
 
@@ -14,10 +15,10 @@ pub struct SlotRackState {
 }
 
 /// Draw the Kontakt-style slot rack.
-pub fn draw(ui: &mut egui::Ui, state: &mut EditorState) {
+pub fn draw(ui: &mut egui::Ui, state: &mut EditorState, z: f32) {
     ui.set_clip_rect(ui.max_rect());
     ui.vertical(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
+        ui.spacing_mut().item_spacing = egui::vec2(zs(6.0, z), zs(4.0, z));
 
         // Header with "Add Slot" button
         ui.horizontal(|ui| {
@@ -25,11 +26,11 @@ pub fn draw(ui: &mut egui::Ui, state: &mut EditorState) {
                 egui::RichText::new("Slot Rack")
                     .color(colors::TEXT)
                     .strong()
-                    .size(14.0),
+                    .size(zs(14.0, z)),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .button(egui::RichText::new("+ Add Slot").color(colors::GREEN).size(12.0))
+                    .button(egui::RichText::new("+ Add Slot").color(colors::GREEN).size(zs(12.0, z)))
                     .clicked()
                 {
                     if let Ok(mut ps) = state.plugin_state.lock() {
@@ -60,9 +61,9 @@ pub fn draw(ui: &mut egui::Ui, state: &mut EditorState) {
                         } else {
                             colors::CRUST
                         })
-                        .inner_margin(egui::Margin::symmetric(10, 6))
+                        .inner_margin(egui::Margin::symmetric(zs(10.0, z) as i8, zs(6.0, z) as i8))
                         .outer_margin(egui::Margin::symmetric(0, 1))
-                        .corner_radius(4.0)
+                        .corner_radius(zs(4.0, z))
                         .stroke(egui::Stroke::new(
                             1.0,
                             if is_selected {
@@ -72,7 +73,7 @@ pub fn draw(ui: &mut egui::Ui, state: &mut EditorState) {
                             },
                         ))
                         .show(ui, |ui| {
-                            draw_slot_strip(ui, state, idx);
+                            draw_slot_strip(ui, state, idx, z);
                         });
                 }
 
@@ -92,7 +93,7 @@ pub fn draw(ui: &mut egui::Ui, state: &mut EditorState) {
 }
 
 /// Draw a single slot strip (one row in the rack).
-fn draw_slot_strip(ui: &mut egui::Ui, state: &mut EditorState, idx: usize) {
+fn draw_slot_strip(ui: &mut egui::Ui, state: &mut EditorState, idx: usize, z: f32) {
     let slot_config = if let Ok(ps) = state.plugin_state.lock() {
         ps.slot_configs.get(idx).cloned()
     } else {
@@ -113,7 +114,7 @@ fn draw_slot_strip(ui: &mut egui::Ui, state: &mut EditorState, idx: usize) {
                 egui::RichText::new(format!("{}.", idx + 1))
                     .color(colors::OVERLAY0)
                     .strong()
-                    .size(12.0),
+                    .size(zs(12.0, z)),
             );
 
             // Slot name / preset name
@@ -125,7 +126,7 @@ fn draw_slot_strip(ui: &mut egui::Ui, state: &mut EditorState, idx: usize) {
                 "Empty".to_string()
             };
 
-            ui.label(egui::RichText::new(&name).color(colors::TEXT).strong().size(13.0));
+            ui.label(egui::RichText::new(&name).color(colors::TEXT).strong().size(zs(13.0, z)));
 
             // MIDI channel
             let ch_text = if config.midi_channel == 0 {
@@ -133,12 +134,12 @@ fn draw_slot_strip(ui: &mut egui::Ui, state: &mut EditorState, idx: usize) {
             } else {
                 format!("Ch:{}", config.midi_channel)
             };
-            ui.label(egui::RichText::new(ch_text).color(colors::SUBTEXT0).size(10.0));
+            ui.label(egui::RichText::new(ch_text).color(colors::SUBTEXT0).size(zs(10.0, z)));
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Remove button
                 if ui
-                    .button(egui::RichText::new("\u{2715}").color(colors::RED).size(11.0))
+                    .button(egui::RichText::new("\u{2715}").color(colors::RED).size(zs(11.0, z)))
                     .clicked()
                 {
                     if let Ok(mut ps) = state.plugin_state.lock() {
@@ -153,7 +154,7 @@ fn draw_slot_strip(ui: &mut egui::Ui, state: &mut EditorState, idx: usize) {
                     colors::OVERLAY0
                 };
                 if ui
-                    .button(egui::RichText::new("S").color(solo_color).size(11.0))
+                    .button(egui::RichText::new("S").color(solo_color).size(zs(11.0, z)))
                     .clicked()
                 {
                     if let Ok(mut ps) = state.plugin_state.lock() {
@@ -170,7 +171,7 @@ fn draw_slot_strip(ui: &mut egui::Ui, state: &mut EditorState, idx: usize) {
                     colors::OVERLAY0
                 };
                 if ui
-                    .button(egui::RichText::new("M").color(mute_color).size(11.0))
+                    .button(egui::RichText::new("M").color(mute_color).size(zs(11.0, z)))
                     .clicked()
                 {
                     if let Ok(mut ps) = state.plugin_state.lock() {
@@ -192,7 +193,7 @@ fn draw_slot_strip(ui: &mut egui::Ui, state: &mut EditorState, idx: usize) {
         ui.separator();
 
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Vol:").color(colors::SUBTEXT0).size(11.0));
+            ui.label(egui::RichText::new("Vol:").color(colors::SUBTEXT0).size(zs(11.0, z)));
             let mut vol = config.volume;
             if ui
                 .add(egui::Slider::new(&mut vol, 0.0..=1.5).show_value(false))
@@ -205,7 +206,7 @@ fn draw_slot_strip(ui: &mut egui::Ui, state: &mut EditorState, idx: usize) {
                 }
             }
 
-            ui.label(egui::RichText::new("Pan:").color(colors::SUBTEXT0).size(11.0));
+            ui.label(egui::RichText::new("Pan:").color(colors::SUBTEXT0).size(zs(11.0, z)));
             let mut pan = config.pan;
             if ui
                 .add(egui::Slider::new(&mut pan, -1.0..=1.0).show_value(false))
@@ -237,7 +238,7 @@ fn draw_slot_strip(ui: &mut egui::Ui, state: &mut EditorState, idx: usize) {
             ui.label(
                 egui::RichText::new(note_name(config.root_note))
                     .color(colors::TEAL)
-                    .size(11.0),
+                    .size(zs(11.0, z)),
             );
         });
 
@@ -261,7 +262,7 @@ fn draw_slot_strip(ui: &mut egui::Ui, state: &mut EditorState, idx: usize) {
 
         // Show compile error if any
         if let Some(ref err) = config.compile_error {
-            ui.label(egui::RichText::new(err).color(colors::RED).size(11.0));
+            ui.label(egui::RichText::new(err).color(colors::RED).size(zs(11.0, z)));
         }
     }
 }

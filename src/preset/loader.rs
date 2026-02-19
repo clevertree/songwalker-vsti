@@ -44,17 +44,10 @@ impl PresetLoader {
         let _ = self.cache.ensure_dirs();
     }
 
-    /// Fetch the root library index (list of available libraries).
+    /// Fetch the root library index from the network.
     ///
-    /// Returns cached data immediately if available, then refreshes in background.
+    /// Always fetches from network to get fresh data. Caches the result on disk.
     pub async fn fetch_root_index(&self) -> Result<serde_json::Value, String> {
-        // Try cache first
-        if let Some(cached) = self.cache.read_root_index() {
-            if let Ok(val) = serde_json::from_str(&cached) {
-                return Ok(val);
-            }
-        }
-
         // Fetch from network
         let url = format!("{}/index.json", self.base_url);
         let response = self
@@ -75,7 +68,44 @@ impl PresetLoader {
         serde_json::from_str(&text).map_err(|e| format!("Failed to parse root index: {}", e))
     }
 
-    /// Fetch a specific library's index.
+    /// Fetch a specific library's index by relative path (e.g. "Aspirin/index.json").
+    ///
+    /// `cache_key` is used for disk cache (typically the library display name).
+    /// Returns the raw JSON Value for flexible parsing by PresetManager.
+    pub async fn fetch_library_index_by_path(
+        &self,
+        path: &str,
+        cache_key: &str,
+    ) -> Result<serde_json::Value, String> {
+        // Try cache
+        if let Some(cached) = self.cache.read_library_index(cache_key) {
+            if let Ok(val) = serde_json::from_str(&cached) {
+                return Ok(val);
+            }
+        }
+
+        // Fetch from network
+        let url = format!("{}/{}", self.base_url, path);
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to fetch library index {}: {}", path, e))?;
+
+        let text = response
+            .text()
+            .await
+            .map_err(|e| format!("Failed to read response: {}", e))?;
+
+        // Cache it
+        let _ = self.cache.write_library_index(cache_key, &text);
+
+        serde_json::from_str(&text)
+            .map_err(|e| format!("Failed to parse library index {}: {}", path, e))
+    }
+
+    /// Fetch a specific library's index (legacy — uses songwalker-core LibraryIndex type).
     pub async fn fetch_library_index(
         &self,
         library: &str,

@@ -69,7 +69,8 @@ impl Plugin for SongWalkerPlugin {
         let preset_manager = self.preset_manager.clone();
         let plugin_state = self.plugin_state.clone();
         let params = self.params.clone();
-        editor::create(preset_manager, plugin_state, params)
+        let editor_state = self.params.editor_state.clone();
+        editor::create(preset_manager, plugin_state, params, editor_state)
     }
 
     fn initialize(
@@ -85,11 +86,7 @@ impl Plugin for SongWalkerPlugin {
 
         // Start background preset manager (fetches library indexes)
         let pm = self.preset_manager.clone();
-        std::thread::spawn(move || {
-            if let Ok(mut manager) = pm.lock() {
-                manager.start_background_refresh();
-            }
-        });
+        PresetManager::start_background_refresh(pm);
 
         true
     }

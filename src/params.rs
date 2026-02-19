@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use nih_plug::prelude::*;
+use nih_plug_egui::EguiState;
 
 /// Top-level plugin parameters exposed to the DAW for automation.
 ///
@@ -8,6 +9,10 @@ use nih_plug::prelude::*;
 /// these are the global controls.
 #[derive(Params)]
 pub struct SongWalkerParams {
+    /// Editor window size/scale state (persisted across DAW sessions).
+    #[persist = "editor-state"]
+    pub editor_state: Arc<EguiState>,
+
     /// Master output volume (dB).
     #[id = "master_vol"]
     pub master_volume: FloatParam,
@@ -28,6 +33,8 @@ pub struct SongWalkerParams {
 impl Default for SongWalkerParams {
     fn default() -> Self {
         Self {
+            editor_state: crate::editor::default_state(),
+
             master_volume: FloatParam::new(
                 "Master Volume",
                 util::db_to_gain(0.0),
