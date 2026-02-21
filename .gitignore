@@ -1,1 +1,9 @@
 /target
+
+# Runtime log files
+*.log
+automated_crash_log.txt
+crash_log.txt
+standalone_output.log
+debug
+info
