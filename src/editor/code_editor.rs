@@ -1,4 +1,5 @@
 use nih_plug_egui::egui;
+use egui::text::LayoutJob;
 
 use super::colors;
 
@@ -10,25 +11,66 @@ pub fn draw(ui: &mut egui::Ui, source: &mut String) {
         ui.label(egui::RichText::new(".sw Track Editor").color(colors::TEXT));
         ui.separator();
 
-        // Full-size code editor
+        // Build a custom layouter that applies syntax highlighting
+        let mut layouter = |ui: &egui::Ui, text: &str, wrap_width: f32| {
+            let highlights = syntax_highlight(text);
+            let mut job = LayoutJob::default();
+            job.wrap.max_width = wrap_width;
+
+            let font_id = egui::FontId::monospace(14.0);
+            let default_color = colors::TEXT;
+
+            if highlights.is_empty() {
+                // No highlighting — render all text in default color
+                job.append(text, 0.0, egui::TextFormat {
+                    font_id,
+                    color: default_color,
+                    ..Default::default()
+                });
+            } else {
+                let mut last_end = 0;
+                for (range, color) in &highlights {
+                    // Gap before this token (whitespace, etc.)
+                    if range.start > last_end {
+                        job.append(&text[last_end..range.start], 0.0, egui::TextFormat {
+                            font_id: font_id.clone(),
+                            color: default_color,
+                            ..Default::default()
+                        });
+                    }
+                    // The highlighted token
+                    let end = range.end.min(text.len());
+                    if range.start < end {
+                        job.append(&text[range.start..end], 0.0, egui::TextFormat {
+                            font_id: font_id.clone(),
+                            color: *color,
+                            ..Default::default()
+                        });
+                    }
+                    last_end = end;
+                }
+                // Remaining text after last token
+                if last_end < text.len() {
+                    job.append(&text[last_end..], 0.0, egui::TextFormat {
+                        font_id,
+                        color: default_color,
+                        ..Default::default()
+                    });
+                }
+            }
+
+            ui.fonts(|f| f.layout_job(job))
+        };
+
+        // Full-size code editor with syntax highlighting
         let _response = ui.add(
             egui::TextEdit::multiline(source)
                 .font(egui::TextStyle::Monospace)
                 .desired_rows(20)
                 .desired_width(f32::INFINITY)
-                .code_editor(),
+                .code_editor()
+                .layouter(&mut layouter),
         );
-
-        // TODO: Apply syntax highlighting overlays using songwalker_core::lexer
-        // Token type → color mapping:
-        //   - Note events (C4, D#5, etc.) → TEAL
-        //   - Track keyword → YELLOW
-        //   - const/let/for → MAUVE
-        //   - String literals → GREEN
-        //   - Numbers → PEACH
-        //   - Comments → OVERLAY0
-        //   - Operators → SUBTEXT0
-        //   - Function calls → BLUE
     });
 }
 

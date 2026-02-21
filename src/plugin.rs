@@ -1,11 +1,14 @@
 use nih_plug::prelude::*;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicU32;
 
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::audio::AudioEngine;
 use crate::editor;
-use crate::editor::EditorEvent;
+use crate::editor::{EditorEvent, PresetLoadedEvent};
+use crate::editor::visualizer::VisualizerState;
 use crate::params::SongWalkerParams;
 use crate::preset::manager::PresetManager;
 use crate::slots::SlotManager;
@@ -25,10 +28,20 @@ pub struct SongWalkerPlugin {
     transport: TransportState,
     /// Serializable plugin state for DAW save/restore.
     plugin_state: Arc<Mutex<PluginState>>,
-    /// Channel sender for editor events (note on/off, preview).
+    /// Channel sender for editor events (note on/off).
     event_tx: Sender<EditorEvent>,
     /// Channel receiver drained on the audio thread each process block.
     event_rx: Receiver<EditorEvent>,
+    /// Channel sender for loaded presets (editor/background → audio thread).
+    preset_loaded_tx: Sender<PresetLoadedEvent>,
+    /// Channel receiver for loaded presets (drained on audio thread).
+    preset_loaded_rx: Receiver<PresetLoadedEvent>,
+    /// Shared status text displayed in the editor footer.
+    status_text: Arc<Mutex<String>>,
+    /// Shared visualizer state (lock-free, fed from audio thread).
+    visualizer_state: Arc<VisualizerState>,
+    /// Live voice count (updated per process block, read by editor).
+    voice_count: Arc<AtomicU32>,
     /// Sample rate provided by the host.
     sample_rate: f32,
 }
@@ -37,15 +50,21 @@ impl Default for SongWalkerPlugin {
     fn default() -> Self {
         let params = Arc::new(SongWalkerParams::default());
         let (event_tx, event_rx) = crossbeam_channel::bounded(64);
+        let (preset_loaded_tx, preset_loaded_rx) = crossbeam_channel::bounded(16);
         Self {
             params,
             audio_engine: AudioEngine::new(),
-            slot_manager: SlotManager::new(),
+            slot_manager: SlotManager::new_empty(),
             preset_manager: Arc::new(Mutex::new(PresetManager::new())),
             transport: TransportState::default(),
             plugin_state: Arc::new(Mutex::new(PluginState::default())),
             event_tx,
             event_rx,
+            preset_loaded_tx,
+            preset_loaded_rx,
+            status_text: Arc::new(Mutex::new(String::new())),
+            visualizer_state: Arc::new(VisualizerState::new(512)),
+            voice_count: Arc::new(AtomicU32::new(0)),
             sample_rate: 44100.0,
         }
     }
@@ -81,7 +100,24 @@ impl Plugin for SongWalkerPlugin {
         let params = self.params.clone();
         let editor_state = self.params.editor_state.clone();
         let event_tx = self.event_tx.clone();
-        editor::create(preset_manager, plugin_state, params, editor_state, event_tx)
+        let audio_preset_loaded_tx = self.preset_loaded_tx.clone();
+        let (ui_preset_loaded_tx, ui_preset_loaded_rx) = crossbeam_channel::unbounded();
+        let status_text = self.status_text.clone();
+        let visualizer_state = self.visualizer_state.clone();
+        let voice_count = self.voice_count.clone();
+        editor::create(
+            preset_manager,
+            plugin_state,
+            params,
+            editor_state,
+            event_tx,
+            audio_preset_loaded_tx,
+            ui_preset_loaded_tx,
+            ui_preset_loaded_rx,
+            status_text,
+            visualizer_state,
+            voice_count,
+        )
     }
 
     fn initialize(
@@ -90,15 +126,22 @@ impl Plugin for SongWalkerPlugin {
         buffer_config: &BufferConfig,
         _context: &mut impl InitContext<Self>,
     ) -> bool {
+        log::info!("SongWalkerPlugin::initialize() sample_rate={}", buffer_config.sample_rate);
         self.sample_rate = buffer_config.sample_rate;
         self.audio_engine
             .initialize(buffer_config.sample_rate, buffer_config.max_buffer_size as usize);
         self.slot_manager.initialize(buffer_config.sample_rate);
+        
+        // Ensure all slots are allocated now (not in process() which would crash)
+        log::info!("SongWalkerPlugin::initialize() allocate_all");
+        self.slot_manager.allocate_all();
 
         // Start background preset manager (fetches library indexes)
+        log::info!("SongWalkerPlugin::initialize() background refresh start");
         let pm = self.preset_manager.clone();
         PresetManager::start_background_refresh(pm);
 
+        log::info!("SongWalkerPlugin::initialize() success");
         true
     }
 
@@ -116,47 +159,61 @@ impl Plugin for SongWalkerPlugin {
         // Update transport from host
         self.transport.update(context.transport());
 
-        // Drain editor events (piano keys, preview play) and route to slots
+        // --- Drain loaded presets (background thread → audio thread) ---
+        while let Ok(loaded) = self.preset_loaded_rx.try_recv() {
+            // Index must be within pre-allocated bounds
+            if loaded.slot_index < self.slot_manager.slot_count() {
+                let slot = &mut self.slot_manager.slots_mut()[loaded.slot_index];
+                slot.preset_state_mut()
+                    .load_preset(loaded.preset_id, loaded.instance);
+
+                // Optionally trigger a note-on immediately after loading (preview)
+                if let Some(note) = loaded.play_note {
+                    let note_event = NoteEvent::NoteOn {
+                        timing: 0,
+                        voice_id: None,
+                        channel: 0,
+                        note,
+                        velocity: 0.8,
+                    };
+                    self.slot_manager.slots_mut()[loaded.slot_index]
+                        .handle_midi_event(&note_event, &self.transport);
+                }
+            }
+        }
+
+        // --- Drain editor events (piano keys, stop-preview) ---
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
                 EditorEvent::NoteOn { slot_index, note, velocity } => {
-                    let note_event = NoteEvent::NoteOn {
-                        timing: 0,
-                        voice_id: None,
-                        channel: 0,
-                        note,
-                        velocity,
-                    };
-                    if let Some(slot) = self.slot_manager.slots_mut().get_mut(slot_index) {
-                        slot.handle_midi_event(&note_event, &self.transport);
+                    if slot_index < self.slot_manager.slot_count() {
+                        nih_plug::debug::nih_log!("[AudioThread] Received EditorEvent::NoteOn: note={} slot={}", note, slot_index);
+                        let note_event = NoteEvent::NoteOn {
+                            timing: 0,
+                            voice_id: None,
+                            channel: 0,
+                            note,
+                            velocity,
+                        };
+                        self.slot_manager.slots_mut()[slot_index]
+                            .handle_midi_event(&note_event, &self.transport);
                     }
                 }
                 EditorEvent::NoteOff { slot_index, note } => {
-                    let note_event = NoteEvent::NoteOff {
-                        timing: 0,
-                        voice_id: None,
-                        channel: 0,
-                        note,
-                        velocity: 0.0,
-                    };
                     if let Some(slot) = self.slot_manager.slots_mut().get_mut(slot_index) {
-                        slot.handle_midi_event(&note_event, &self.transport);
-                    }
-                }
-                EditorEvent::PreviewPreset { slot_index } => {
-                    // Future: play C4 E4 G4 C5 arpeggio
-                    let note_event = NoteEvent::NoteOn {
-                        timing: 0,
-                        voice_id: None,
-                        channel: 0,
-                        note: 60,
-                        velocity: 0.8,
-                    };
-                    if let Some(slot) = self.slot_manager.slots_mut().get_mut(slot_index) {
+                        nih_plug::debug::nih_log!("[AudioThread] Received EditorEvent::NoteOff: note={} slot={}", note, slot_index);
+                        let note_event = NoteEvent::NoteOff {
+                            timing: 0,
+                            voice_id: None,
+                            channel: 0,
+                            note,
+                            velocity: 0.0,
+                        };
                         slot.handle_midi_event(&note_event, &self.transport);
                     }
                 }
                 EditorEvent::StopPreview => {
+                    nih_plug::debug::nih_log!("[AudioThread] Received EditorEvent::StopPreview");
                     // All-notes-off on all slots
                     for slot in self.slot_manager.slots_mut() {
                         let all_off = NoteEvent::MidiCC {
@@ -179,6 +236,8 @@ impl Plugin for SongWalkerPlugin {
             &mut self.slot_manager,
             &self.transport,
             &self.params,
+            &self.visualizer_state,
+            &self.voice_count,
         );
 
         ProcessStatus::Normal

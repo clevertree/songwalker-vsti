@@ -25,6 +25,8 @@ pub struct LibraryInfo {
     pub name: String,
     /// Relative path to library's index.json.
     pub path: String,
+    /// Base path for URL construction (e.g., "FluidR3_GM").
+    pub slug: String,
     pub description: String,
     pub preset_count: usize,
     pub status: LibraryStatus,
@@ -42,6 +44,15 @@ pub struct PresetInfo {
     pub zone_count: u32,
 }
 
+/// A sub-index entry within a library (e.g., a game within SNES library).
+#[derive(Debug, Clone)]
+pub struct SubIndexInfo {
+    pub name: String,
+    pub path: String,
+    pub instrument_count: usize,
+    pub expanded: bool,
+}
+
 /// Manages the in-memory registry of available libraries and loaded presets.
 ///
 /// The editor UI reads from this via Arc<Mutex<>>. Background threads
@@ -51,6 +62,10 @@ pub struct PresetManager {
     pub libraries: Vec<LibraryInfo>,
     /// Presets per library (library name → entries).
     pub library_presets: HashMap<String, Vec<PresetInfo>>,
+    /// Sub-indexes per library (library name → sub-index entries).
+    pub sub_indexes: HashMap<String, Vec<SubIndexInfo>>,
+    /// Presets per sub-index ("library/subindex" → entries).
+    pub sub_index_presets: HashMap<String, Vec<PresetInfo>>,
     /// Base URL for the library.
     pub base_url: String,
     /// Search query for filtering presets.
@@ -68,6 +83,8 @@ impl PresetManager {
         Self {
             libraries: Vec::new(),
             library_presets: HashMap::new(),
+            sub_indexes: HashMap::new(),
+            sub_index_presets: HashMap::new(),
             base_url: super::loader::DEFAULT_LIBRARY_URL.to_string(),
             search_query: String::new(),
             category_filter: None,
@@ -198,20 +215,21 @@ impl PresetManager {
 
             if let Ok(rt) = rt {
                 rt.block_on(async {
-                    let (base_url, lib_path) = {
+                    let (base_url, lib_path, lib_slug) = {
                         let mgr = manager_clone.lock().unwrap();
-                        let path = mgr
+                        let lib = mgr
                             .libraries
                             .iter()
-                            .find(|l| l.name == lib_name)
-                            .map(|l| l.path.clone());
-                        (mgr.base_url.clone(), path)
+                            .find(|l| l.name == lib_name);
+                        let path = lib.map(|l| l.path.clone());
+                        let slug = lib.map(|l| l.slug.clone());
+                        (mgr.base_url.clone(), path, slug)
                     };
 
-                    if let Some(path) = lib_path {
+                    if let (Some(path), Some(slug)) = (lib_path, lib_slug) {
                         let loader = PresetLoader::new().with_base_url(base_url);
 
-                        match loader.fetch_library_index_by_path(&path, &lib_name).await {
+                        match loader.fetch_library_index_by_path(&path, &slug).await {
                             Ok(lib_index) => {
                                 let mut mgr = manager_clone.lock().unwrap();
                                 mgr.parse_library_index(&lib_name, &lib_index);
@@ -296,6 +314,14 @@ impl PresetManager {
                 .and_then(|n| n.as_u64())
                 .unwrap_or(0) as usize;
 
+            // Extracts the directory part of the path as the "slug" for requests.
+            // E.g. "FluidR3_GM/index.json" -> "FluidR3_GM"
+            let slug = if let Some(slash_idx) = path.find('/') {
+                path[..slash_idx].to_string()
+            } else {
+                path.clone()
+            };
+
             // Preserve loaded status if library was already loaded
             let status = if self.library_presets.contains_key(&name) {
                 LibraryStatus::Loaded
@@ -306,6 +332,7 @@ impl PresetManager {
             self.libraries.push(LibraryInfo {
                 name,
                 path,
+                slug,
                 description,
                 preset_count,
                 status,
@@ -316,16 +343,8 @@ impl PresetManager {
 
     /// Parse a library's index JSON and populate its preset list.
     ///
-    /// Library index format matches root index but entries are type "preset":
-    /// ```json
-    /// {
-    ///   "format": "songwalker-index",
-    ///   "entries": [
-    ///     { "type": "preset", "name": "...", "path": "...", "category": "sampler", ... },
-    ///     ...
-    ///   ]
-    /// }
-    /// ```
+    /// Handles both flat libraries (entries are "preset") and hierarchical
+    /// libraries (entries are "index" sub-indexes, e.g., SNES games).
     fn parse_library_index(&mut self, library_name: &str, index: &serde_json::Value) {
         let entries = match index.get("entries").and_then(|e| e.as_array()) {
             Some(arr) => arr,
@@ -333,6 +352,7 @@ impl PresetManager {
         };
 
         let mut presets = Vec::new();
+        let mut sub_idxs = Vec::new();
 
         for entry in entries {
             let entry_type = entry
@@ -340,55 +360,224 @@ impl PresetManager {
                 .and_then(|t| t.as_str())
                 .unwrap_or("");
 
-            if entry_type != "preset" {
-                continue;
+            match entry_type {
+                "preset" => {
+                    if let Some(p) = Self::parse_preset_entry(entry) {
+                        presets.push(p);
+                    }
+                }
+                "index" => {
+                    // Sub-index entry (e.g., a game within a library)
+                    let name = entry
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    let path = entry
+                        .get("path")
+                        .and_then(|p| p.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let instrument_count = entry
+                        .get("instrumentCount")
+                        .or_else(|| entry.get("presetCount"))
+                        .and_then(|n| n.as_u64())
+                        .unwrap_or(0) as usize;
+
+                    sub_idxs.push(SubIndexInfo {
+                        name,
+                        path,
+                        instrument_count,
+                        expanded: false,
+                    });
+                }
+                _ => {}
             }
-
-            let name = entry
-                .get("name")
-                .and_then(|n| n.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let path = entry
-                .get("path")
-                .and_then(|p| p.as_str())
-                .unwrap_or("")
-                .to_string();
-            let category = entry
-                .get("category")
-                .and_then(|c| c.as_str())
-                .unwrap_or("sampler")
-                .to_string();
-            let tags: Vec<String> = entry
-                .get("tags")
-                .and_then(|t| t.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let gm_program = entry
-                .get("gmProgram")
-                .and_then(|n| n.as_u64())
-                .map(|n| n as u8);
-            let zone_count = entry
-                .get("zoneCount")
-                .and_then(|n| n.as_u64())
-                .unwrap_or(0) as u32;
-
-            presets.push(PresetInfo {
-                name,
-                path,
-                category,
-                tags,
-                gm_program,
-                zone_count,
-            });
         }
 
-        self.library_presets
-            .insert(library_name.to_string(), presets);
+        if !presets.is_empty() {
+            self.library_presets
+                .insert(library_name.to_string(), presets);
+        }
+        if !sub_idxs.is_empty() {
+            self.sub_indexes
+                .insert(library_name.to_string(), sub_idxs);
+        }
+    }
+
+    /// Parse a single preset entry from a JSON value.
+    fn parse_preset_entry(entry: &serde_json::Value) -> Option<PresetInfo> {
+        let name = entry
+            .get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let path = entry
+            .get("path")
+            .and_then(|p| p.as_str())
+            .unwrap_or("")
+            .to_string();
+        let category = entry
+            .get("category")
+            .and_then(|c| c.as_str())
+            .unwrap_or("sampler")
+            .to_string();
+        let tags: Vec<String> = entry
+            .get("tags")
+            .and_then(|t| t.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let gm_program = entry
+            .get("gmProgram")
+            .and_then(|n| n.as_u64())
+            .map(|n| n as u8);
+        let zone_count = entry
+            .get("zoneCount")
+            .and_then(|n| n.as_u64())
+            .unwrap_or(0) as u32;
+
+        Some(PresetInfo {
+            name,
+            path,
+            category,
+            tags,
+            gm_program,
+            zone_count,
+        })
+    }
+
+    /// Parse a sub-index's JSON and populate its preset list.
+    pub fn parse_sub_index(&mut self, key: &str, index: &serde_json::Value) {
+        let entries = match index.get("entries").and_then(|e| e.as_array()) {
+            Some(arr) => arr,
+            None => return,
+        };
+
+        let mut presets = Vec::new();
+        for entry in entries {
+            let entry_type = entry
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            if entry_type == "preset" {
+                if let Some(p) = Self::parse_preset_entry(entry) {
+                    presets.push(p);
+                }
+            }
+        }
+        self.sub_index_presets.insert(key.to_string(), presets);
+    }
+
+    /// Whether a library has sub-indexes (hierarchical) vs. flat presets.
+    pub fn library_has_sub_indexes(&self, library_name: &str) -> bool {
+        self.sub_indexes.get(library_name).map_or(false, |s| !s.is_empty())
+    }
+
+    /// Fetch a sub-index in the background (called when user expands a game folder).
+    pub fn fetch_sub_index(
+        manager: Arc<Mutex<Self>>,
+        library_name: String,
+        sub_name: String,
+        sub_path: String,
+    ) {
+        let key = format!("{}/{}", library_name, sub_name);
+
+        // Mark as loading
+        {
+            let mut mgr = manager.lock().unwrap();
+            mgr.status_message = format!("Loading {}…", sub_name);
+        }
+
+        let manager_clone = manager.clone();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build();
+
+            if let Ok(rt) = rt {
+                rt.block_on(async {
+                    let base_url = {
+                        let mgr = manager_clone.lock().unwrap();
+                        mgr.base_url.clone()
+                    };
+
+                    // Determine the full path relative to the library
+                    // sub_path may be relative to the library dir
+                    let lib_slug = {
+                        let mgr = manager_clone.lock().unwrap();
+                        mgr.libraries
+                            .iter()
+                            .find(|l| l.name == library_name)
+                            .map(|l| l.slug.clone())
+                            .unwrap_or_default()
+                    };
+
+                    let full_path = if lib_slug.is_empty() {
+                        sub_path.clone()
+                    } else {
+                        format!("{}/{}", lib_slug, sub_path)
+                    };
+
+                    let loader = PresetLoader::new().with_base_url(base_url);
+
+                    match loader.fetch_library_index_by_path(&full_path, &key).await {
+                        Ok(sub_index) => {
+                            let mut mgr = manager_clone.lock().unwrap();
+                            mgr.parse_sub_index(&key, &sub_index);
+                            let count = mgr
+                                .sub_index_presets
+                                .get(&key)
+                                .map(|p| p.len())
+                                .unwrap_or(0);
+                            // Mark sub-index as expanded
+                            if let Some(subs) = mgr.sub_indexes.get_mut(&library_name) {
+                                if let Some(sub) = subs.iter_mut().find(|s| s.name == sub_name) {
+                                    sub.expanded = true;
+                                }
+                            }
+                            mgr.status_message = format!("{}: {} presets", sub_name, count);
+                        }
+                        Err(e) => {
+                            let mut mgr = manager_clone.lock().unwrap();
+                            mgr.status_message = format!("⚠ {}", e);
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    /// Get presets for a sub-index, filtered by current search/category.
+    pub fn filtered_presets_for_sub_index(&self, key: &str) -> Vec<&PresetInfo> {
+        let query = self.search_query.to_lowercase();
+
+        self.sub_index_presets
+            .get(key)
+            .map(|presets| {
+                presets
+                    .iter()
+                    .filter(|p| {
+                        if let Some(ref cat) = self.category_filter {
+                            if &p.category != cat {
+                                return false;
+                            }
+                        }
+                        if !query.is_empty() {
+                            let name_lower = p.name.to_lowercase();
+                            let tag_match = p.tags.iter().any(|t| t.to_lowercase().contains(&query));
+                            if !name_lower.contains(&query) && !tag_match {
+                                return false;
+                            }
+                        }
+                        true
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Get all unique categories across loaded library presets.
@@ -420,10 +609,11 @@ impl PresetManager {
                                 return false;
                             }
                         }
-                        // Search filter
+                        // Search filter (name or tags)
                         if !query.is_empty() {
                             let name_lower = p.name.to_lowercase();
-                            if !name_lower.contains(&query) {
+                            let tag_match = p.tags.iter().any(|t| t.to_lowercase().contains(&query));
+                            if !name_lower.contains(&query) && !tag_match {
                                 return false;
                             }
                         }

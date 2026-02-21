@@ -55,12 +55,16 @@ impl PresetLoader {
             .get(&url)
             .send()
             .await
-            .map_err(|e| format!("Failed to fetch root index: {}", e))?;
+            .map_err(|e| format!("Failed to fetch root index {}: {}", url, e))?;
+
+        if !response.status().is_success() {
+            return Err(format!("Network error {} fetching root index: {}", response.status(), url));
+        }
 
         let text = response
             .text()
             .await
-            .map_err(|e| format!("Failed to read response: {}", e))?;
+            .map_err(|e| format!("Failed to read root index response: {}", e))?;
 
         // Cache it
         let _ = self.cache.write_root_index(&text);
@@ -91,12 +95,16 @@ impl PresetLoader {
             .get(&url)
             .send()
             .await
-            .map_err(|e| format!("Failed to fetch library index {}: {}", path, e))?;
+            .map_err(|e| format!("Failed to fetch library index {}: {}", url, e))?;
+
+        if !response.status().is_success() {
+            return Err(format!("Network error {} fetching library index: {}", response.status(), url));
+        }
 
         let text = response
             .text()
             .await
-            .map_err(|e| format!("Failed to read response: {}", e))?;
+            .map_err(|e| format!("Failed to read library index response: {}", e))?;
 
         // Cache it
         let _ = self.cache.write_library_index(cache_key, &text);
@@ -177,7 +185,11 @@ impl PresetLoader {
             .get(&url)
             .send()
             .await
-            .map_err(|e| format!("Failed to fetch preset {}/{}: {}", library, preset_path, e))?;
+            .map_err(|e| format!("Failed to fetch preset {}: {}", url, e))?;
+
+        if !response.status().is_success() {
+            return Err(format!("Network error {} fetching preset: {}", response.status(), url));
+        }
 
         let text = response
             .text()
@@ -229,8 +241,10 @@ impl PresetLoader {
 
         // Check disk cache
         if let Some(cached) = self.cache.read_sample(library, preset_path, &cache_key) {
+            nih_plug::debug::nih_log!("[LoadSample] Cache HIT: key={}, samples={}", cache_key, cached.len());
             return Ok(cached);
         }
+        nih_plug::debug::nih_log!("[LoadSample] Cache MISS: key={}, fetching from network...", cache_key);
 
         // Fetch and decode
         let raw_bytes = match audio_ref {
@@ -238,13 +252,27 @@ impl PresetLoader {
                 let full_url = if url.starts_with("http") {
                     url.clone()
                 } else {
-                    format!("{}/{}/{}", self.base_url, library, url)
+                    // The URL is relative to the preset.json file location.
+                    // Resolve it by combining the library path and preset directory.
+                    let preset_dir = preset_path
+                        .rsplit_once('/')
+                        .map(|(dir, _)| dir)
+                        .unwrap_or("");
+                    if preset_dir.is_empty() {
+                        format!("{}/{}/{}", self.base_url, library, url)
+                    } else {
+                        format!("{}/{}/{}/{}", self.base_url, library, preset_dir, url)
+                    }
                 };
-                self.client
+                let response = self.client
                     .get(&full_url)
                     .send()
                     .await
-                    .map_err(|e| format!("Failed to fetch sample: {}", e))?
+                    .map_err(|e| format!("Failed to fetch sample {}: {}", full_url, e))?;
+                if !response.status().is_success() {
+                    return Err(format!("HTTP {} fetching sample: {}", response.status(), full_url));
+                }
+                response
                     .bytes()
                     .await
                     .map_err(|e| format!("Failed to read sample bytes: {}", e))?
@@ -264,11 +292,15 @@ impl PresetLoader {
             }
             AudioReference::ContentAddressed { hash, .. } => {
                 let url = format!("{}/{}/{}", self.base_url, library, hash);
-                self.client
+                let response = self.client
                     .get(&url)
                     .send()
                     .await
-                    .map_err(|e| format!("Failed to fetch content-addressed sample: {}", e))?
+                    .map_err(|e| format!("Failed to fetch content-addressed sample {}: {}", url, e))?;
+                if !response.status().is_success() {
+                    return Err(format!("HTTP {} fetching sample: {}", response.status(), url));
+                }
+                response
                     .bytes()
                     .await
                     .map_err(|e| format!("Failed to read sample bytes: {}", e))?
@@ -276,9 +308,13 @@ impl PresetLoader {
             }
         };
 
+        nih_plug::debug::nih_log!("[LoadSample] Fetched {} bytes, codec={:?}", raw_bytes.len(), audio_ref_codec(audio_ref));
+
         // Decode audio to f32 PCM
         let codec = audio_ref_codec(audio_ref);
         let samples = decode_audio(&raw_bytes, &codec)?;
+
+        nih_plug::debug::nih_log!("[LoadSample] Decoded {} samples", samples.len());
 
         // TODO: Resample if source_sample_rate != host_sample_rate
 
@@ -327,11 +363,19 @@ fn audio_ref_codec(audio_ref: &AudioReference) -> AudioCodec {
 
 /// Decode raw audio bytes to f32 PCM based on codec.
 fn decode_audio(bytes: &[u8], codec: &AudioCodec) -> Result<Vec<f32>, String> {
-    match codec {
-        AudioCodec::Mp3 => decode_mp3(bytes),
-        AudioCodec::Wav => decode_wav(bytes),
-        _ => Err(format!("Unsupported codec: {:?}", codec)),
+    if bytes.is_empty() {
+        return Err("Cannot decode empty audio data".to_string());
     }
+    let samples = match codec {
+        AudioCodec::Mp3 => decode_mp3(bytes)?,
+        AudioCodec::Wav => decode_wav(bytes)?,
+        AudioCodec::Raw => decode_raw_pcm(bytes, 16), // Raw = 16-bit signed LE PCM
+        _ => return Err(format!("Unsupported codec: {:?}", codec)),
+    };
+    if samples.is_empty() {
+        return Err(format!("Decoded 0 samples from {} bytes ({:?} codec)", bytes.len(), codec));
+    }
+    Ok(samples)
 }
 
 /// Decode MP3 bytes to f32 samples.

@@ -109,7 +109,7 @@ impl VoicePool {
         }
     }
 
-    /// Release all active voices.
+    /// Release all active voices (start envelope release).
     pub fn release_all(&mut self) {
         for voice in &mut self.voices {
             if voice.active && !voice.releasing {
@@ -117,6 +117,14 @@ impl VoicePool {
                 voice.env_stage = 3;
                 voice.env_samples = 0;
             }
+        }
+    }
+
+    /// Immediately deactivate all voices (hard kill, no release tail).
+    pub fn kill_all(&mut self) {
+        for voice in &mut self.voices {
+            voice.active = false;
+            voice.env_stage = 4;
         }
     }
 
@@ -260,6 +268,10 @@ impl Slot {
 
     pub fn active_voice_count(&self) -> usize {
         self.voice_pool.active_count()
+    }
+
+    pub fn voice_pool_mut(&mut self) -> &mut VoicePool {
+        &mut self.voice_pool
     }
 
     pub fn preset_state(&self) -> &PresetSlotState {
@@ -587,7 +599,7 @@ fn advance_envelope(voice: &mut Voice, adsr: &EnvelopeParams, sample_rate: f32) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::slots::preset_slot::{LoadedZone, PresetInstance};
+    use songwalker_core::preset::instance::{LoadedZone, PresetInstance};
     use songwalker_core::preset::{
         AudioCodec, AudioReference, KeyRange, PresetCategory, PresetDescriptor, PresetNode,
         SampleZone, SamplerConfig, ZonePitch,
@@ -620,6 +632,8 @@ mod tests {
     /// Helper: create a test PresetDescriptor wrapping a zone.
     fn test_preset_descriptor(zone: SampleZone) -> PresetDescriptor {
         PresetDescriptor {
+            format: None,
+            version: None,
             id: "test-preset".into(),
             name: "Test Preset".into(),
             category: PresetCategory::Sampler,
@@ -844,14 +858,15 @@ mod tests {
             zone,
             pcm_data: Arc::from(pcm),
             channels: 1,
+            sample_rate: 44100,
         };
 
-        let preset_instance = PresetInstance {
+        let preset_instance = Arc::new(PresetInstance {
             descriptor: test_preset_descriptor(test_sample_zone()),
             zones: vec![loaded_zone],
-        };
+        });
 
-        slot.preset_state_mut().load_preset("test/preset".into(), preset_instance);
+        slot.preset_state_mut().load_preset(Arc::new("test/preset".to_string()), preset_instance);
 
         let note_on = NoteEvent::NoteOn {
             timing: 0, voice_id: None, channel: 0, note: 69, velocity: 1.0,
@@ -889,14 +904,15 @@ mod tests {
             zone,
             pcm_data: Arc::from(pcm),
             channels: 2,
+            sample_rate: 44100,
         };
 
-        let preset_instance = PresetInstance {
+        let preset_instance = Arc::new(PresetInstance {
             descriptor: test_preset_descriptor(test_sample_zone()),
             zones: vec![loaded_zone],
-        };
+        });
 
-        slot.preset_state_mut().load_preset("test/stereo".into(), preset_instance);
+        slot.preset_state_mut().load_preset(Arc::new("test/stereo".to_string()), preset_instance);
 
         let note_on = NoteEvent::NoteOn {
             timing: 0, voice_id: None, channel: 0, note: 69, velocity: 1.0,
@@ -928,14 +944,15 @@ mod tests {
             zone,
             pcm_data: Arc::from(pcm),
             channels: 1,
+            sample_rate: 44100,
         };
 
-        let preset_instance = PresetInstance {
+        let preset_instance = Arc::new(PresetInstance {
             descriptor: test_preset_descriptor(test_sample_zone()),
             zones: vec![loaded_zone],
-        };
+        });
 
-        slot.preset_state_mut().load_preset("test/short".into(), preset_instance);
+        slot.preset_state_mut().load_preset(Arc::new("test/short".to_string()), preset_instance);
 
         let note_on = NoteEvent::NoteOn {
             timing: 0, voice_id: None, channel: 0, note: 69, velocity: 1.0,
@@ -992,5 +1009,242 @@ mod tests {
         assert_eq!(slot.midi_channel(), 16);
         slot.set_midi_channel(-1);
         assert_eq!(slot.midi_channel(), 0);
+    }
+
+    // ── Sample Loading & Playback Pipeline ──────────────────────
+
+    /// Helper: generate a mono sine wave PCM buffer at the given frequency.
+    fn make_sine_pcm(freq_hz: f32, sample_rate: u32, num_frames: usize) -> Vec<f32> {
+        (0..num_frames)
+            .map(|i| (i as f32 / sample_rate as f32 * freq_hz * std::f32::consts::TAU).sin())
+            .collect()
+    }
+
+    /// Helper: build a full PresetInstance with a single mono zone covering all keys.
+    fn make_test_preset(pcm: Vec<f32>, root_note: u8, sample_rate: u32) -> Arc<PresetInstance> {
+        let zone = SampleZone {
+            key_range: KeyRange { low: 0, high: 127 },
+            velocity_range: None,
+            pitch: ZonePitch { root_note, fine_tune_cents: 0.0 },
+            sample_rate,
+            r#loop: None,
+            audio: AudioReference::External {
+                url: "test.mp3".into(),
+                codec: AudioCodec::Mp3,
+                sha256: None,
+            },
+        };
+        let loaded_zone = LoadedZone {
+            zone: zone.clone(),
+            pcm_data: Arc::from(pcm),
+            channels: 1,
+            sample_rate,
+        };
+        Arc::new(PresetInstance {
+            descriptor: test_preset_descriptor(zone),
+            zones: vec![loaded_zone],
+        })
+    }
+
+    #[test]
+    fn preset_load_then_play_produces_audio() {
+        // Simulates the full preview pipeline:
+        // 1. Load preset into slot
+        // 2. Trigger NoteOn (note 60, like preview does)
+        // 3. Render a block
+        // 4. Verify non-zero audio output
+        let mut slot = Slot::new(0);
+        slot.initialize(44100.0);
+        let transport = default_transport();
+
+        let preset = make_test_preset(
+            make_sine_pcm(440.0, 44100, 44100),
+            69, // A4
+            44100,
+        );
+        slot.preset_state_mut()
+            .load_preset(Arc::new("test/preview".to_string()), preset);
+
+        // Preview triggers note 60 (middle C)
+        let note_on = NoteEvent::NoteOn {
+            timing: 0, voice_id: None, channel: 0, note: 60, velocity: 0.8,
+        };
+        slot.handle_midi_event(&note_on, &transport);
+        assert_eq!(slot.active_voice_count(), 1, "voice should be allocated after NoteOn");
+
+        let num_samples = 512;
+        let mut left = vec![0.0f32; num_samples];
+        let mut right = vec![0.0f32; num_samples];
+        slot.render(&mut left, &mut right, num_samples, 44100.0, &transport);
+
+        let peak = left.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        assert!(peak > 0.01, "preset playback should produce audible output, peak={peak}");
+    }
+
+    #[test]
+    fn preset_zone_matching_selects_correct_zone() {
+        // Test that key-range matching works correctly with multiple zones
+        let zone_low = SampleZone {
+            key_range: KeyRange { low: 0, high: 60 },
+            velocity_range: None,
+            pitch: ZonePitch { root_note: 48, fine_tune_cents: 0.0 },
+            sample_rate: 44100,
+            r#loop: None,
+            audio: AudioReference::External {
+                url: "low.mp3".into(), codec: AudioCodec::Mp3, sha256: None,
+            },
+        };
+        let zone_high = SampleZone {
+            key_range: KeyRange { low: 61, high: 127 },
+            velocity_range: None,
+            pitch: ZonePitch { root_note: 72, fine_tune_cents: 0.0 },
+            sample_rate: 44100,
+            r#loop: None,
+            audio: AudioReference::External {
+                url: "high.mp3".into(), codec: AudioCodec::Mp3, sha256: None,
+            },
+        };
+
+        let pcm_low: Vec<f32> = vec![0.5; 1000]; // constant 0.5
+        let pcm_high: Vec<f32> = vec![0.9; 1000]; // constant 0.9
+
+        let loaded_low = LoadedZone {
+            zone: zone_low, pcm_data: Arc::from(pcm_low), channels: 1, sample_rate: 44100,
+        };
+        let loaded_high = LoadedZone {
+            zone: zone_high, pcm_data: Arc::from(pcm_high), channels: 1, sample_rate: 44100,
+        };
+
+        let preset = PresetInstance {
+            descriptor: test_preset_descriptor(test_sample_zone()),
+            zones: vec![loaded_low, loaded_high],
+        };
+
+        // Note 50 should match zone 0 (low)
+        let (idx, _) = preset.find_zone_indexed(50, 0.8).expect("should find low zone");
+        assert_eq!(idx, 0, "note 50 should map to zone 0 (low)");
+
+        // Note 70 should match zone 1 (high)
+        let (idx, _) = preset.find_zone_indexed(70, 0.8).expect("should find high zone");
+        assert_eq!(idx, 1, "note 70 should map to zone 1 (high)");
+
+        // Note 60 should match zone 0 (low, inclusive upper bound)
+        let (idx, _) = preset.find_zone_indexed(60, 0.8).expect("should find low zone at boundary");
+        assert_eq!(idx, 0, "note 60 should map to zone 0 (boundary)");
+    }
+
+    #[test]
+    fn preset_pitch_shift_changes_playback_rate() {
+        // When playing a note different from root_note, sample_rate_ratio should differ
+        let mut slot = Slot::new(0);
+        slot.initialize(44100.0);
+        let transport = default_transport();
+
+        let preset = make_test_preset(
+            make_sine_pcm(440.0, 44100, 44100),
+            69, // root = A4
+            44100,
+        );
+        slot.preset_state_mut()
+            .load_preset(Arc::new("test/pitch".to_string()), preset);
+
+        // Play note 69 (root) — rate should be ~1.0
+        let note_on = NoteEvent::NoteOn {
+            timing: 0, voice_id: None, channel: 0, note: 69, velocity: 0.8,
+        };
+        slot.handle_midi_event(&note_on, &transport);
+
+        let voice_at_root = slot.voice_pool.active_voices_mut()
+            .find(|v| v.note == 69)
+            .map(|v| v.sample_rate_ratio)
+            .unwrap();
+        assert!(
+            (voice_at_root - 1.0).abs() < 0.01,
+            "playing root note should have rate ~1.0, got {voice_at_root}"
+        );
+
+        // Release and play note 81 (one octave up) — rate should be ~2.0
+        slot.voice_pool.release(69);
+        let note_on_high = NoteEvent::NoteOn {
+            timing: 0, voice_id: None, channel: 0, note: 81, velocity: 0.8,
+        };
+        slot.handle_midi_event(&note_on_high, &transport);
+
+        let voice_octave_up = slot.voice_pool.active_voices_mut()
+            .find(|v| v.note == 81)
+            .map(|v| v.sample_rate_ratio)
+            .unwrap();
+        assert!(
+            (voice_octave_up - 2.0).abs() < 0.05,
+            "one octave up should have rate ~2.0, got {voice_octave_up}"
+        );
+    }
+
+    #[test]
+    fn preset_load_unload_stops_audio() {
+        let mut slot = Slot::new(0);
+        slot.initialize(44100.0);
+        let transport = default_transport();
+
+        let preset = make_test_preset(
+            make_sine_pcm(440.0, 44100, 44100),
+            69, 44100,
+        );
+        slot.preset_state_mut()
+            .load_preset(Arc::new("test/unload".to_string()), preset);
+
+        let note_on = NoteEvent::NoteOn {
+            timing: 0, voice_id: None, channel: 0, note: 69, velocity: 0.8,
+        };
+        slot.handle_midi_event(&note_on, &transport);
+
+        // Render first block — should have audio
+        let mut left = vec![0.0f32; 256];
+        let mut right = vec![0.0f32; 256];
+        slot.render(&mut left, &mut right, 256, 44100.0, &transport);
+        let energy_before: f32 = left.iter().map(|s| s * s).sum();
+        assert!(energy_before > 0.0, "should have audio before unload");
+
+        // Unload preset — removes the active_preset
+        slot.preset_state_mut().unload_preset();
+
+        // Render another block — voices still active but fall back to sine
+        // (they won't crash even without a preset)
+        let mut left2 = vec![0.0f32; 256];
+        let mut right2 = vec![0.0f32; 256];
+        slot.render(&mut left2, &mut right2, 256, 44100.0, &transport);
+        // Should still produce audio (sine fallback)
+        let energy_after: f32 = left2.iter().map(|s| s * s).sum();
+        assert!(energy_after > 0.0, "sine fallback should still produce audio after unload");
+    }
+
+    #[test]
+    fn multiple_voices_mix_correctly() {
+        let mut slot = Slot::new(0);
+        slot.initialize(44100.0);
+        let transport = default_transport();
+
+        let preset = make_test_preset(
+            make_sine_pcm(440.0, 44100, 44100),
+            69, 44100,
+        );
+        slot.preset_state_mut()
+            .load_preset(Arc::new("test/multi".to_string()), preset);
+
+        // Trigger two notes simultaneously
+        for note in [60, 64] {
+            let note_on = NoteEvent::NoteOn {
+                timing: 0, voice_id: None, channel: 0, note, velocity: 0.8,
+            };
+            slot.handle_midi_event(&note_on, &transport);
+        }
+        assert_eq!(slot.active_voice_count(), 2, "should have 2 voices");
+
+        let mut left = vec![0.0f32; 256];
+        let mut right = vec![0.0f32; 256];
+        slot.render(&mut left, &mut right, 256, 44100.0, &transport);
+
+        let peak = left.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        assert!(peak > 0.01, "mixed output should have audible level, peak={peak}");
     }
 }

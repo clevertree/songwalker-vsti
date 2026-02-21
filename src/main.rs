@@ -1,14 +1,29 @@
-use nih_plug::prelude::*;
 
-#[cfg(target_os = "linux")]
-mod x11_setup;
-
-/// Standalone entry point for testing without a host DAW.
+/// Standalone entry point — uses custom cpal/midir/eframe backend
+/// instead of nih-plug's standalone wrapper.
+///
+/// This gives us runtime audio device switching, PulseAudio/PipeWire support,
+/// and MIDI device selection from the Settings panel.
 fn main() {
-    // On Linux, spawn a thread to set WM_CLASS and _NET_WM_ICON once the
-    // window appears so the desktop environment shows the correct name and icon.
-    #[cfg(target_os = "linux")]
-    x11_setup::spawn_x11_setup_thread();
+    // Initialize logger for easier automated testing.
+    env_logger::init();
 
-    nih_export_standalone::<songwalker_vsti::SongWalkerPlugin>();
+    // Ensure all panics are logged properly before crashing.
+    std::panic::set_hook(Box::new(|panic_info| {
+        let (filename, line) = panic_info
+            .location()
+            .map(|loc| (loc.file(), loc.line()))
+            .unwrap_or(("<unknown>", 0));
+        let message = panic_info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| panic_info.payload().downcast_ref::<String>().map(|s| s.as_str()))
+            .unwrap_or("<no message>");
+        log::error!("CRASH in {}:{}: {}", filename, line, message);
+        eprintln!("CRASH in {}:{}: {}", filename, line, message);
+    }));
+
+    // Launch the custom standalone app (cpal + midir + eframe)
+    songwalker_vsti::standalone::run();
 }

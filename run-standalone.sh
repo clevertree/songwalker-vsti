@@ -12,4 +12,12 @@ if [ ! -f /usr/lib/x86_64-linux-gnu/libxcb-dri2.so ] && [ -f /usr/lib/x86_64-lin
     export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-L$(pwd)/$SHIM_DIR"
 fi
 
-cargo run --bin songwalker-standalone -- "$@"
+# Enable backtraces and info logging for easier testing
+export RUST_BACKTRACE=1
+export RUST_LOG=info
+
+# Create a clean log file each time
+LOG_FILE="standalone_output.log"
+echo "--- Standalone started at $(date) ---" > "$LOG_FILE"
+
+cargo run --bin songwalker-standalone -- "$@" 2>&1 | tee -a "$LOG_FILE"

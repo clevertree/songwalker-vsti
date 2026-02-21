@@ -187,11 +187,25 @@
     background-color: var(--surface0);
 }
 
-.category-chip.cat-all:checked { color: var(--blue); }
-.category-chip.cat-sampler:checked { color: var(--green); }
-.category-chip.cat-synth:checked { color: var(--blue); }
-.category-chip.cat-composite:checked { color: var(--mauve); }
-.category-chip.cat-effect:checked { color: var(--peach); }
+.category-chip.cat-all:checked {
+    color: var(--blue);
+}
+
+.category-chip.cat-sampler:checked {
+    color: var(--green);
+}
+
+.category-chip.cat-synth:checked {
+    color: var(--blue);
+}
+
+.category-chip.cat-composite:checked {
+    color: var(--mauve);
+}
+
+.category-chip.cat-effect:checked {
+    color: var(--peach);
+}
 
 /* Library tree */
 .library-row {

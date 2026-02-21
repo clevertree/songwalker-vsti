@@ -13,6 +13,7 @@ pub mod perf;
 pub mod plugin;
 pub mod preset;
 pub mod slots;
+pub mod standalone;
 pub mod state;
 pub mod transport;
 

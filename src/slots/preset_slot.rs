@@ -1,15 +1,14 @@
 use std::sync::Arc;
-
-use songwalker_core::preset::{PresetDescriptor, SampleZone};
+use songwalker_core::preset::instance::PresetInstance;
 
 use super::slot::EnvelopeParams;
 
 /// State specific to a Preset-mode slot.
 pub struct PresetSlotState {
     /// The currently loaded and active preset (fully decoded, ready for audio thread).
-    pub active_preset: Option<PresetInstance>,
+    pub active_preset: Option<Arc<PresetInstance>>,
     /// Identifier of the loaded preset (library/path).
-    pub preset_id: Option<String>,
+    pub preset_id: Option<Arc<String>>,
     /// Current pitch bend value (0.0 = center, -1.0..1.0 range).
     pub pitch_bend: f32,
     /// Modulation wheel (CC1).
@@ -59,7 +58,7 @@ impl PresetSlotState {
     /// Load a new preset (called from the background thread after fetching).
     ///
     /// The `PresetInstance` must be fully prepared (samples decoded to f32 PCM).
-    pub fn load_preset(&mut self, id: String, instance: PresetInstance) {
+    pub fn load_preset(&mut self, id: Arc<String>, instance: Arc<PresetInstance>) {
         self.preset_id = Some(id);
         self.active_preset = Some(instance);
     }
@@ -71,56 +70,72 @@ impl PresetSlotState {
     }
 }
 
-/// A fully-loaded preset ready for use on the audio thread.
-///
-/// All sample data is decoded and stored as `Arc<[f32]>` slices.
-/// This struct is built on a background thread and then atomically
-/// swapped into the audio thread.
-pub struct PresetInstance {
-    /// The original preset descriptor (metadata, graph info).
-    pub descriptor: PresetDescriptor,
-    /// Decoded sample zones with PCM data.
-    pub zones: Vec<LoadedZone>,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl PresetInstance {
-    /// Find the best matching zone for a given note and velocity.
-    pub fn find_zone(&self, note: u8, velocity: f32) -> Option<&LoadedZone> {
-        self.find_zone_indexed(note, velocity).map(|(_, z)| z)
+    #[test]
+    fn test_default_values() {
+        let state = PresetSlotState::default();
+        assert!(state.active_preset.is_none());
+        assert!(state.preset_id.is_none());
+        assert_eq!(state.pitch_bend, 0.0);
+        assert_eq!(state.mod_wheel, 0.0);
+        assert_eq!(state.expression, 1.0);
     }
 
-    /// Find the best matching zone, returning its index and a reference.
-    pub fn find_zone_indexed(&self, note: u8, velocity: f32) -> Option<(usize, &LoadedZone)> {
-        let vel_u8 = (velocity * 127.0) as u8;
-        self.zones.iter().enumerate().find(|(_, z)| {
-            note >= z.zone.key_range.low
-                && note <= z.zone.key_range.high
-                && z.zone
-                    .velocity_range
-                    .as_ref()
-                    .map_or(true, |vr| vel_u8 >= vr.low && vel_u8 <= vr.high)
-        })
-    }
-}
-
-/// A sample zone with decoded PCM audio data.
-pub struct LoadedZone {
-    /// The original zone descriptor (key range, pitch, loop points, etc.).
-    pub zone: SampleZone,
-    /// Decoded audio data (mono or interleaved stereo) at the host sample rate.
-    pub pcm_data: Arc<[f32]>,
-    /// Number of channels (1 = mono, 2 = stereo).
-    pub channels: u32,
-}
-
-impl LoadedZone {
-    /// Get the native sample rate of this zone's pitch info.
-    pub fn pitch(&self) -> &songwalker_core::preset::ZonePitch {
-        &self.zone.pitch
+    #[test]
+    fn test_handle_cc1_mod_wheel() {
+        let mut state = PresetSlotState::default();
+        state.handle_cc(1, 0.75);
+        assert_eq!(state.mod_wheel, 0.75);
     }
 
-    /// Get the sample rate this zone was decoded at.
-    pub fn sample_rate(&self) -> u32 {
-        self.zone.sample_rate
+    #[test]
+    fn test_handle_cc11_expression() {
+        let mut state = PresetSlotState::default();
+        state.handle_cc(11, 0.5);
+        assert_eq!(state.expression, 0.5);
+    }
+
+    #[test]
+    fn test_handle_cc_volume_pan_at_slot_level() {
+        let mut state = PresetSlotState::default();
+        let orig_mod = state.mod_wheel;
+        let orig_expr = state.expression;
+        // CC7 (volume) and CC10 (pan) are handled at slot level, not here
+        state.handle_cc(7, 0.9);
+        state.handle_cc(10, 0.3);
+        assert_eq!(state.mod_wheel, orig_mod);
+        assert_eq!(state.expression, orig_expr);
+    }
+
+    #[test]
+    fn test_envelope_default() {
+        let state = PresetSlotState::default();
+        let env = state.envelope();
+        // EnvelopeParams::default() should have reasonable values
+        // Just verify it doesn't panic and returns something
+        let _ = env;
+    }
+
+    #[test]
+    fn test_set_envelope() {
+        let mut state = PresetSlotState::default();
+        let mut env = state.envelope();
+        env.attack_secs = 0.1;
+        state.set_envelope(env);
+        assert_eq!(state.envelope().attack_secs, 0.1);
+    }
+
+    #[test]
+    fn test_unload_preset() {
+        let mut state = PresetSlotState::default();
+        // Load something
+        state.preset_id = Some(Arc::new("test/preset".to_string()));
+        // Unload
+        state.unload_preset();
+        assert!(state.preset_id.is_none());
+        assert!(state.active_preset.is_none());
     }
 }
